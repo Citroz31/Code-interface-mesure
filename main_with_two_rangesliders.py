@@ -130,8 +130,25 @@ class S2PViewerApp:
         self.y_max.set(y_max + margin)
 
     def export_csv(self):
-        if self.x_data is None or self.y_data is None:
+        if not self.network:
             return
+
+        mode = self.display_var.get()
+        freqs = self.network.f / 1e9  # GHz
+        s_params = self.network.s  # shape: (freqs, 2, 2)
+
+        if mode == "Amplitude (dB)":
+            s11 = 20 * np.log10(np.abs(s_params[:, 0, 0]))
+            s12 = 20 * np.log10(np.abs(s_params[:, 0, 1]))
+            s21 = 20 * np.log10(np.abs(s_params[:, 1, 0]))
+            s22 = 20 * np.log10(np.abs(s_params[:, 1, 1]))
+            headers = ["Fréquence (GHz)", "S11 (dB)", "S12 (dB)", "S21 (dB)", "S22 (dB)"]
+        else:
+            s11 = np.angle(s_params[:, 0, 0], deg=True)
+            s12 = np.angle(s_params[:, 0, 1], deg=True)
+            s21 = np.angle(s_params[:, 1, 0], deg=True)
+            s22 = np.angle(s_params[:, 1, 1], deg=True)
+            headers = ["Fréquence (GHz)", "S11 (deg)", "S12 (deg)", "S21 (deg)", "S22 (deg)"]
 
         filepath = filedialog.asksaveasfilename(defaultextension=".csv",
                                                 filetypes=[("CSV files", "*.csv")],
@@ -140,10 +157,11 @@ class S2PViewerApp:
             return
 
         with open(filepath, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Frequency (GHz)", "Value"])
-            for x, y in zip(self.x_data / 1e9, self.y_data):
-                writer.writerow([x, y])
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(headers)
+            for i in range(len(freqs)):
+                writer.writerow([f"{freqs[i]:.6f}", f"{s11[i]:.4f}", f"{s12[i]:.4f}",
+                                 f"{s21[i]:.4f}", f"{s22[i]:.4f}"])
 
     def update_plot(self, event=None, reset_range=False):
         if not self.network:
@@ -170,8 +188,8 @@ class S2PViewerApp:
             y_data = np.angle(s_param, deg=True)
             ax.set_ylabel(f"Phase {trace} (deg)")
 
-        x_data = freqs / 1e9  # en GHz
-        self.x_data = freqs  # Hz pour CSV
+        x_data = freqs / 1e9  # GHz
+        self.x_data = freqs  # Hz pour survol/export
         self.y_data = y_data
 
         mask = (x_data >= self.freq_min.get()) & (x_data <= self.freq_max.get())
@@ -189,6 +207,8 @@ class S2PViewerApp:
         self.canvas = FigureCanvasTkAgg(fig, master=self.canvas_frame)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        plt.close(fig)  # <- empêche l'accumulation de figures en mémoire
 
         self.hover_annotation = ax.annotate("", xy=(0, 0), xytext=(15, 15), textcoords="offset points",
                                             bbox=dict(boxstyle="round", fc="w"),
