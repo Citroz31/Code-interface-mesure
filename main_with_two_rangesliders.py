@@ -38,13 +38,13 @@ class S2PViewerApp:
         self.trace_box = ttk.Combobox(self.control_bar, textvariable=self.trace_var, state="readonly",
                                       values=["S11", "S12", "S21", "S22"])
         self.trace_box.pack(side=tk.LEFT, padx=5)
-        self.trace_box.bind("<<ComboboxSelected>>", self.update_plot)
+        self.trace_box.bind("<<ComboboxSelected>>", lambda e: self.update_plot(reset_range=True))
 
         self.display_var = tk.StringVar(value="Amplitude (dB)")
         self.display_box = ttk.Combobox(self.control_bar, textvariable=self.display_var, state="readonly",
                                         values=["Amplitude (dB)", "Phase (deg)"])
         self.display_box.pack(side=tk.LEFT, padx=5)
-        self.display_box.bind("<<ComboboxSelected>>", self.update_plot)
+        self.display_box.bind("<<ComboboxSelected>>", lambda e: self.update_plot(reset_range=True))
 
         self.export_button = tk.Button(self.control_bar, text="💾 Export", command=self.export_csv)
         self.export_button.pack(side=tk.RIGHT, padx=10)
@@ -55,30 +55,36 @@ class S2PViewerApp:
         self.slider_frame = tk.Frame(self.plot_control_frame)
         self.slider_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=5)
 
-        # Sliders classiques Tkinter pour fréquence
-        self.freq_slider_min = tk.Scale(self.slider_frame, label="Fréquence min (Hz)", orient=tk.HORIZONTAL,
-                                        variable=self.freq_min, command=lambda x: self.update_plot())
-        self.freq_slider_min.pack(fill=tk.X)
+        # Sliders double (Fréquence) sur une ligne
+        freq_frame = tk.Frame(self.slider_frame)
+        freq_frame.pack(fill=tk.X)
+        tk.Label(freq_frame, text="Fréq min (GHz)").pack(side=tk.LEFT)
+        self.freq_slider_min = tk.Scale(freq_frame, variable=self.freq_min, orient=tk.HORIZONTAL, resolution=0.01,
+                                        length=400, command=lambda x: self.update_plot())
+        self.freq_slider_min.pack(side=tk.LEFT, padx=5)
+        tk.Label(freq_frame, text="Fréq max (GHz)").pack(side=tk.LEFT)
+        self.freq_slider_max = tk.Scale(freq_frame, variable=self.freq_max, orient=tk.HORIZONTAL, resolution=0.01,
+                                        length=400, command=lambda x: self.update_plot())
+        self.freq_slider_max.pack(side=tk.LEFT, padx=5)
 
-        self.freq_slider_max = tk.Scale(self.slider_frame, label="Fréquence max (Hz)", orient=tk.HORIZONTAL,
-                                        variable=self.freq_max, command=lambda x: self.update_plot())
-        self.freq_slider_max.pack(fill=tk.X)
-
-        # Sliders classiques Tkinter pour amplitude / phase
-        self.y_slider_min = tk.Scale(self.slider_frame, label="Y min", orient=tk.HORIZONTAL,
-                                     variable=self.y_min, command=lambda x: self.update_plot())
-        self.y_slider_min.pack(fill=tk.X)
-
-        self.y_slider_max = tk.Scale(self.slider_frame, label="Y max", orient=tk.HORIZONTAL,
-                                     variable=self.y_max, command=lambda x: self.update_plot())
-        self.y_slider_max.pack(fill=tk.X)
+        # Sliders double (Amplitude/Phase) sur une ligne
+        y_frame = tk.Frame(self.slider_frame)
+        y_frame.pack(fill=tk.X)
+        tk.Label(y_frame, text="Y min").pack(side=tk.LEFT)
+        self.y_slider_min = tk.Scale(y_frame, variable=self.y_min, orient=tk.HORIZONTAL, resolution=1,
+                                     length=400, command=lambda x: self.update_plot())
+        self.y_slider_min.pack(side=tk.LEFT, padx=5)
+        tk.Label(y_frame, text="Y max").pack(side=tk.LEFT)
+        self.y_slider_max = tk.Scale(y_frame, variable=self.y_max, orient=tk.HORIZONTAL, resolution=1,
+                                     length=400, command=lambda x: self.update_plot())
+        self.y_slider_max.pack(side=tk.LEFT, padx=5)
 
         self.button_frame = tk.Frame(self.main_frame)
         self.button_frame.pack(side=tk.RIGHT, fill=tk.Y)
 
         for label in ["FREQ", "Gen S2P", "CAL", "MEAS", "APP"]:
             tk.Button(self.button_frame, text=label, height=2, width=10).pack(pady=5)
-            
+
     def setup_menu(self):
         menu_bar = Menu(self.root)
         file_menu = Menu(menu_bar, tearoff=0)
@@ -100,22 +106,23 @@ class S2PViewerApp:
                 self.update_plot()
 
     def set_slider_ranges(self):
-        freqs = self.network.f
-        self.freq_slider_min.config(from_=freqs.min(), to=freqs.max())
-        self.freq_slider_max.config(from_=freqs.min(), to=freqs.max())
-        self.freq_min.set(freqs.min())
-        self.freq_max.set(freqs.max())
+        freqs_ghz = self.network.f / 1e9
+        self.freq_slider_min.config(from_=freqs_ghz.min(), to=freqs_ghz.max())
+        self.freq_slider_max.config(from_=freqs_ghz.min(), to=freqs_ghz.max())
+        self.freq_min.set(freqs_ghz.min())
+        self.freq_max.set(freqs_ghz.max())
 
         trace = self.trace_var.get()
         m, n = int(trace[1]) - 1, int(trace[2]) - 1
         s_param = self.network.s[:, m, n]
+        mode = self.display_var.get()
 
-        if self.display_var.get() == "Amplitude (dB)":
+        if mode == "Amplitude (dB)":
             y_data = 20 * np.log10(np.abs(s_param))
         else:
             y_data = np.angle(s_param, deg=True)
 
-        y_min, y_max = y_data.min(), y_data.max()
+        y_min, y_max = np.min(y_data), np.max(y_data)
         margin = 0.1 * (y_max - y_min)
         self.y_slider_min.config(from_=y_min - margin, to=y_max + margin)
         self.y_slider_max.config(from_=y_min - margin, to=y_max + margin)
@@ -134,13 +141,16 @@ class S2PViewerApp:
 
         with open(filepath, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["Frequency (Hz)", "Value"])
-            for x, y in zip(self.x_data, self.y_data):
+            writer.writerow(["Frequency (GHz)", "Value"])
+            for x, y in zip(self.x_data / 1e9, self.y_data):
                 writer.writerow([x, y])
 
-    def update_plot(self, event=None):
+    def update_plot(self, event=None, reset_range=False):
         if not self.network:
             return
+
+        if reset_range:
+            self.set_slider_ranges()
 
         for widget in self.canvas_frame.winfo_children():
             widget.destroy()
@@ -151,16 +161,17 @@ class S2PViewerApp:
         m, n = int(trace[1]) - 1, int(trace[2]) - 1
         freqs = self.network.f
         s_param = self.network.s[:, m, n]
+        mode = self.display_var.get()
 
-        if self.display_var.get() == "Amplitude (dB)":
+        if mode == "Amplitude (dB)":
             y_data = 20 * np.log10(np.abs(s_param))
             ax.set_ylabel(f"|{trace}| (dB)")
         else:
             y_data = np.angle(s_param, deg=True)
             ax.set_ylabel(f"Phase {trace} (deg)")
 
-        x_data = freqs
-        self.x_data = x_data
+        x_data = freqs / 1e9  # en GHz
+        self.x_data = freqs  # Hz pour CSV
         self.y_data = y_data
 
         mask = (x_data >= self.freq_min.get()) & (x_data <= self.freq_max.get())
@@ -170,8 +181,8 @@ class S2PViewerApp:
         ax.plot(x_plot, y_plot, label=trace)
         ax.set_xlim(self.freq_min.get(), self.freq_max.get())
         ax.set_ylim(self.y_min.get(), self.y_max.get())
-        ax.set_xlabel("Fréquence (Hz)")
-        ax.set_title(f"{trace} - {self.display_var.get()}")
+        ax.set_xlabel("Fréquence (GHz)")
+        ax.set_title(f"{trace} - {mode}")
         ax.grid(True)
         ax.legend()
 
@@ -195,13 +206,12 @@ class S2PViewerApp:
             x_val = x_data[idx]
             y_val = y_data[idx]
             self.hover_annotation.xy = (x_val, y_val)
-            self.hover_annotation.set_text(f"{x_val:.2e} Hz\\n{y_val:.2f}")
+            self.hover_annotation.set_text(f"{x_val:.3f} GHz\\n{y_val:.2f}")
             self.hover_annotation.set_visible(True)
             self.canvas.draw_idle()
 
         self.canvas.mpl_connect("motion_notify_event", on_motion)
 
-# Lancement
 if __name__ == "__main__":
     root = tk.Tk()
     app = S2PViewerApp(root)
