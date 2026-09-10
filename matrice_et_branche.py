@@ -1,4 +1,5 @@
 import os
+import logging
 import shutil
 import tkinter as tk
 
@@ -12,13 +13,14 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from scipy.linalg import sqrtm, logm, expm
-from scipy.signal import (savgol_filter,medfilt,butter,filtfilt,firwin, wiener)
-from scipy.ndimage import gaussian_filter1d
-import pywt
-from skrf.vectorFitting import VectorFitting
+from afr import deembed as afr_deembed
+from afr import io as afr_io
+from afr import metrics as afr_metrics
+from afr import reflect as afr_reflect
+from afr import signal as afr_signal
+from afr import thru as afr_thru
 
-from scipy.interpolate import (interp1d,PchipInterpolator,CubicSpline,Akima1DInterpolator)
+log = logging.getLogger("afr.gui")
 
 
 EPS = 1e-12
@@ -596,1977 +598,359 @@ class AFRWizardComplete(tk.Tk):
         self.back_btn.pack(side="right", padx=5)
 
 
-    def frequency_to_time(self, x):
-    
-            full = np.concatenate(
-                [
-                    x,
-                    np.conjugate(x[1:][::-1])
-                ]
-            )
-    
-            xt = np.fft.ifft(full)
-    
-            return xt
-    def gate_response(self, x, peak, width):
-    
-            xt = self.frequency_to_time(x)
-    
-            gate = np.zeros(len(xt))
-    
-            start = max(
-                0,
-                peak - width
-            )
-    
-            stop = min(
-                len(xt),
-                peak + width
-            )
-    
-            gate[start:stop] = np.hanning(
-                stop - start
-            )
-    
-            xt_gate = xt * gate
-    
-            xf = np.fft.fft(
-                xt_gate
-            )
-    
-            return xf[:len(x)]
-    
-    def uniform_grid_with_dc(self, f, x):
+    # ======================================================================
+    # Pont vers le noyau de calcul (paquet afr/)
+    # ======================================================================
 
-        use_interp = True
+    def filter_settings(self):
+        """Parametres de filtrage choisis dans l'interface (None si desactive)."""
 
-        if hasattr(self, "enable_interpolation"):
-            use_interp = self.enable_interpolation.get()
+        if not self.enable_filter.get():
+            return None
 
-        if not use_interp:
-            return f, x
-
-        f = np.asarray(f, dtype=float)
-        x = np.asarray(x, dtype=complex)
-
-        df = np.median(np.diff(f))
-
-        # Grille uniforme 0, df, 2df, ... jusqu'a f[-1] (sans depasser
-        # d'un pas complet comme le faisait np.arange(0, f[-1] + df, df)).
-        n_points = int(round(f[-1] / df))
-
-        fu = np.arange(n_points + 1) * df
-
-        xu = self.interpolate_complex_data(
-            f,
-            x,
-            fu
+        return dict(
+            method=self.filter_method.get(),
+            window=self.filter_window.get(),
+            order=self.filter_order.get(),
+            sigma=self.filter_sigma.get(),
+            cutoff=self.filter_cutoff.get(),
         )
 
-        # Pas d'extrapolation en dehors de la bande mesuree : on prolonge
-        # par la valeur mesuree la plus proche. Evite les NaN d'Akima et
-        # les divergences des splines sous f[0] et au dessus de f[-1].
-        xu = np.where(fu < f[0], x[0], xu)
-        xu = np.where(fu > f[-1], x[-1], xu)
+    def apply_filter(self, signal, frequency=None):
+        settings = self.filter_settings()
 
-        xu[0] = np.real(xu[0])
+        if settings is None:
+            return np.asarray(signal, dtype=complex)
 
-        return fu, xu
-        
-    def to_time_domain(self, fu, X):
-    
-            N = len(fu)
-    
-            w = np.kaiser(
-                2*N-1,
-                4.5
-            )[N-1:]
-    
-            nfft = 8 * 2**int(
-                np.ceil(
-                    np.log2(
-                        2*(N-1)
-                    )
-                )
-            )
-    
-            h = np.fft.irfft(
-                X*w,
-                n=nfft
-            )
-    
-            df = fu[1] - fu[0]
-    
-            dt = 1.0/(nfft*df)
-    
-            t = np.arange(nfft)*dt
-    
-            return t, h, w, nfft
-    
-    def raised_cosine_gate(
-            self,
-            t,
-            t1,
-            t2,
-            edge
-        ):
-    
-            g = np.zeros_like(t)
-    
-            g[(t>=t1)&(t<=t2)] = 1.0
-    
-            r = (t>=t1-edge)&(t<t1)
-    
-            g[r] = 0.5*(
-                1
-                -
-                np.cos(
-                    np.pi*
-                    (t[r]-(t1-edge))
-                    /edge
-                )
-            )
-    
-            r = (t>t2)&(t<=t2+edge)
-    
-            g[r] = 0.5*(
-                1
-                +
-                np.cos(
-                    np.pi*
-                    (t[r]-t2)
-                    /edge
-                )
-            )
-    
-            return g
-    
-    def gate_to_freq(
-            self,
-            h,
-            gate,
-            w,
-            nfft,
-            nf
-        ):
-    
-            Y = np.fft.rfft(
-                h*gate,
-                n=nfft
-            )[:nf]
-    
-            return Y / np.maximum(
-                w,
-                0.05
-            )
-    
-    def complex_sqrt_half_phase(
-            self,
-            G,
-            f=None
-        ):
-            """
-            Racine carree complexe "continue" : module = sqrt(|G|),
-            phase = phase deroulee de G divisee par 2.
+        return afr_signal.filter_complex(signal, frequency=frequency, **settings)
 
-            La racine carree a deux branches (+/- ). Si la grille de
-            frequence f est fournie, la branche est choisie pour que la
-            phase de G extrapolee a DC soit ~0 (modulo 2*pi), c'est a dire
-            sqrt(G) reelle positive a basse frequence, ce qui est le cas
-            d'un S21 de fixture passif. Sans cela, un point DC bruite ou de
-            mauvais signe decale toute la phase de S21 de +/-90 degres.
-            """
+    def interpolation_name(self):
+        """Methode d'interpolation de la grille temporelle ('Linear' si desactivee)."""
 
-            mag = np.sqrt(
-                np.abs(G)
-            )
+        enable = getattr(self, "enable_interpolation", None)
 
-            phase = np.unwrap(
-                np.angle(G)
-            )
+        if enable is None or not enable.get():
+            return "Linear"
 
-            if f is not None and len(f) >= 3:
+        return self.interpolation_method.get()
 
-                f = np.asarray(f, dtype=float)
+    def eps_r_value(self):
+        """Permittivite effective saisie (1.0 par defaut ou si invalide)."""
 
-                n_fit = max(
-                    3,
-                    int(0.05 * len(f))
-                )
+        try:
+            value = float(self.eps_r_eff.get())
+        except (tk.TclError, ValueError, AttributeError):
+            value = 1.0
 
-                slope, intercept = np.polyfit(
-                    f[:n_fit],
-                    phase[:n_fit],
-                    1
-                )
-
-                phase = phase - 2.0*np.pi*np.round(
-                    intercept / (2.0*np.pi)
-                )
-
-            return mag * np.exp(
-                1j*phase/2.0
-            )
-
-    def reflect_coefficient(self, reflect_type=None, filename=None):
-        """
-        Coefficient de reflexion ideal du standard 1 port :
-        +1 pour un OPEN, -1 pour un SHORT.
-
-        reflect_type peut etre "OPEN", "SHORT" ou une cle du type
-        "OPEN_A" / "SHORT_B". A defaut, le nom du fichier est analyse.
-        """
-
-        label = ""
-
-        if reflect_type is not None:
-            label = str(reflect_type).upper()
-
-        if "SHORT" not in label and "OPEN" not in label and filename:
-            label = Path(filename).name.upper()
-
-        if "SHORT" in label:
-            return -1.0
-
-        if "OPEN" in label:
-            return 1.0
-
-        print(
-            "Standard de reflexion inconnu -> OPEN suppose (Gamma_L = +1)"
-        )
-
-        return 1.0
+        return value if value > 0 else 1.0
 
     def build_afr_s2p_from_s1p(self, filename, reflect_type=None):
         """
-        Construit le S2P d'un fixture a partir d'une mesure 1 port du
-        fixture termine par un OPEN ou un SHORT (methode AFR).
-
-        Modele (Gamma_L = +1 OPEN, -1 SHORT) :
-
-            Gamma_mes(f) = S11 + S21^2 * Gamma_L / (1 - S22 * Gamma_L)
-
-        Dans le domaine temporel :
-          - la reflexion proche (t ~ 0) donne S11 ;
-          - la reflexion lointaine (t ~ 2*tau) vaut, au premier ordre,
-            (1 - S11^2) * Gamma_L * exp(-2j*beta*l) = S21^2 * Gamma_L / (1 - S11^2)
-            (meme relation que pour le 2x-thru : s21_2x * (1 - s11_half^2)).
-
-        D'ou :  S21 = sqrt( Gamma_far / Gamma_L * (1 - S11^2) )
-
-        Corrections apportees par rapport a la version precedente :
-          - prise en compte du signe du standard (SHORT = -1) : sinon la
-            phase de S21 est fausse de 90 degres pour le SHORT ;
-          - fenetre temporelle de S11 symetrique autour de t = 0 : la
-            partie a temps negatif (repliee en fin de fenetre) etait perdue,
-            S11 etait sous-estime et deforme ;
-          - choix de la branche de la racine carree (phase -> 0 a DC) ;
-          - terme (1 - S11^2) coherent avec build_half_thru ;
-          - impedance caracteristique de type TDR calculee a partir de la
-            reflexion proche (Re(Z11) du reseau ouvert n'a pas de sens) ;
-          - Z0 du fichier d'origine conserve dans le reseau construit.
+        S2P d'un fixture a partir d'un S1P OPEN ou SHORT (voir afr.reflect).
+        Retourne un afr.FixtureResult (reseau, impedance, delai, longueur).
         """
 
-        print("FILE =", filename)
+        ntwk = afr_io.load_network(filename, expected_ports=1)
+        freq = ntwk.f
+        gamma = self.apply_filter(ntwk.s[:, 0, 0], freq)
 
-        ntwk = rf.Network(filename)
+        result = afr_reflect.fixture_from_reflect(
+            freq,
+            gamma,
+            reflect_type or filename,
+            z0=afr_io.reference_impedance(ntwk),
+            interp_method=self.interpolation_name(),
+        )
+        result.with_length(self.eps_r_value())
 
-        if ntwk.nports != 1:
-            raise ValueError(
-                f"{Path(filename).name} n'est pas un fichier S1P "
-                f"(nombre de ports = {ntwk.nports})"
-            )
+        log.info(
+            "%s : Z = %.1f ohm, TTD = %.1f ps, longueur = %.2f mm",
+            Path(filename).name, result.impedance_ohm, result.delay_ps, result.length_mm,
+        )
+        return result
 
-        freq = ntwk.frequency.f
+    def build_open_short_fixture(self, open_file, short_file):
+        """Fixture extrait des mesures OPEN et SHORT combinees (afr.reflect)."""
 
-        try:
-            z0_ref = float(
-                np.real(
-                    np.asarray(ntwk.z0).flat[0]
-                )
-            )
-        except Exception:
-            z0_ref = 50.0
+        n_open = afr_io.load_network(open_file, expected_ports=1)
+        n_short = afr_io.load_network(short_file, expected_ports=1)
 
-        gamma_l = self.reflect_coefficient(
-            reflect_type,
-            filename
+        if len(n_open.f) != len(n_short.f) or not np.allclose(n_open.f, n_short.f):
+            n_short = n_short.interpolate(n_open.frequency)
+
+        freq = n_open.f
+
+        result = afr_reflect.fixture_from_open_short(
+            freq,
+            self.apply_filter(n_open.s[:, 0, 0], freq),
+            self.apply_filter(n_short.s[:, 0, 0], freq),
+            z0=afr_io.reference_impedance(n_open),
+            interp_method=self.interpolation_name(),
+        )
+        return result.with_length(self.eps_r_value())
+
+    def build_half_thru(self, thru_file, source_key="THRU_LINE1"):
+        """
+        Decoupe un 2x-thru en deux demi-fixtures (afr.thru) et les exporte.
+        Retourne (half_in, half_out, information).
+        """
+
+        thru = afr_io.load_network(thru_file, expected_ports=2)
+        freq = thru.f
+
+        filtered = thru.copy()
+        s = filtered.s.copy()
+        for i in range(2):
+            for j in range(2):
+                s[:, i, j] = self.apply_filter(s[:, i, j], freq)
+        filtered.s = s
+
+        half_in, half_out, information = afr_thru.split_2x_thru(
+            filtered,
+            self.interpolation_name(),
         )
 
-        gamma_meas = ntwk.s[:,0,0]
-        gamma_meas = self.apply_filter(gamma_meas, freq)
+        length_mm = afr_metrics.physical_length(
+            information["delay1"] * 1e-12,
+            self.eps_r_value(),
+        ) * 1e3
+        information["length1"] = length_mm
+        information["length2"] = length_mm
 
-        use_interp = True
+        output_dir = Path(self.rf_output_dir.get())
+        form = self.export_format.get()
 
-        if hasattr(self, "enable_interpolation"):
-            use_interp = self.enable_interpolation.get()
-
-        if use_interp:
-
-            fu, Xo = self.uniform_grid_with_dc(
-                freq,
-                gamma_meas
-            )
-
-        else:
-
-            # Le fenetrage temporel (irfft) exige une grille uniforme
-            # partant de DC : interpolation lineaire minimale si
-            # l'utilisateur a desactive l'interpolation.
-            df = np.median(np.diff(freq))
-
-            fu = np.arange(
-                int(round(freq[-1] / df)) + 1
-            ) * df
-
-            Xo = (
-                np.interp(fu, freq, np.real(gamma_meas))
-                +
-                1j*np.interp(fu, freq, np.imag(gamma_meas))
-            )
-
-            Xo[0] = np.real(Xo[0])
-
-        print("================================")
-        print("AFR FREQUENCY CHECK")
-        print("================================")
-
-        print("Standard =", "SHORT" if gamma_l < 0 else "OPEN",
-              "(Gamma_L =", gamma_l, ")")
-
-        print("Interpolation =", use_interp)
-
-        print("Freq min =", freq[0]/1e9, "GHz")
-        print("Freq max =", freq[-1]/1e9, "GHz")
-
-        print("FU min =", fu[0]/1e9, "GHz")
-        print("FU max =", fu[-1]/1e9, "GHz")
-
-        t, ho, w, nfft = self.to_time_domain(
-            fu,
-            Xo
+        self.half_thru_file_in = str(
+            afr_io.write_network(half_in, output_dir / f"{source_key}_HALF_IN", form)
+        )
+        self.half_thru_file_out = str(
+            afr_io.write_network(half_out, output_dir / f"{source_key}_HALF_OUT", form)
         )
 
-        bw = fu[-1]
+        self.converted_files[f"{source_key}_IN"] = self.half_thru_file_in
+        self.converted_files[f"{source_key}_OUT"] = self.half_thru_file_out
 
-        tres = 1.0 / bw
-
-        span = 1.0 / (
-            fu[1]
-            -
-            fu[0]
+        log.info(
+            "%s : TTD total = %.1f ps, demi = %.1f ps, Z1 = %.1f ohm, Z2 = %.1f ohm",
+            source_key, information["delay_total_ps"], information["delay1"],
+            information["z1"], information["z2"],
         )
+        return half_in, half_out, information
 
-        # Axe temporel "centre" : les echantillons t > span/2 correspondent
-        # aux temps negatifs (repliement circulaire de l'irfft).
-        t_sym = np.where(
-            t > span/2,
-            t - span,
-            t
-        )
+    def remove_fixture(self, dut_file, fixture_in, fixture_out):
+        """DUT de-embedde (afr.deembed)."""
 
-        # ------------------------------------------------------------
-        # Recherche de la reflexion lointaine (bout du fixture)
-        # ------------------------------------------------------------
+        dut = afr_io.load_network(dut_file, expected_ports=2)
+        dut.name = Path(dut_file).stem
+        return afr_deembed.remove_fixtures(dut, fixture_in, fixture_out)
 
-        m = np.abs(ho).copy()
+    def reflect_fixture_network(self, side):
+        """Reseau du fixture 'side' (A/B) issu des reflexions, le meilleur disponible."""
 
-        m[t < 3*tres] = 0
+        for key in (f"REFLECT_{side}", f"OPEN_{side}", f"SHORT_{side}"):
+            result = self.fixture_results.get(key)
+            if result is not None:
+                return result.network
 
-        m[t > span/2] = 0
+        return None
 
-        peak_index = int(np.argmax(m))
+    # ======================================================================
+    # Lignes de resultats (Z, TTD, longueur)
+    # ======================================================================
 
-        gate_center = t[peak_index]
+    @staticmethod
+    def row_name(port):
+        return port if isinstance(port, str) else f"Port {port}"
 
-        gate_half = min(
-            max(
-                7*tres,
-                0.15*gate_center
-            ),
-            0.6*gate_center
-        )
+    def create_port_result_row(self, port):
+        if port in self.port_result_rows:
+            return
 
-        edge = tres
+        name = self.row_name(port)
+        row = len(self.port_result_rows)
 
-        tau = gate_center / 2.0
+        z_var = tk.StringVar(value=f"{name} Z = --")
+        d_var = tk.StringVar(value=f"{name} TTD = --")
+        l_var = tk.StringVar(value=f"{name} Length = --")
 
-        print(
-            "AFR Delay (pic temporel) =",
-            tau*1e12,
-            "ps"
-        )
-
-        # ------------------------------------------------------------
-        # Fenetres temporelles
-        # ------------------------------------------------------------
-
-        # Reflexion lointaine : S21^2 * Gamma_L
-        g21 = self.raised_cosine_gate(
-            t,
-            gate_center-gate_half,
-            gate_center+gate_half,
-            edge
-        )
-
-        t_split = max(
-            2*tres,
-            0.5*(
-                gate_center-gate_half
-            )
-        )
-
-        # Reflexion proche : S11, fenetre symetrique autour de t = 0
-        # (inclut la partie a temps negatif repliee en fin de vecteur).
-        g11 = self.raised_cosine_gate(
-            t_sym,
-            -t_split,
-            t_split,
-            edge
-        )
-
-        nf = len(fu)
-
-        Go = self.gate_to_freq(
-            ho,
-            g21,
-            w,
-            nfft,
-            nf
-        )
-
-        S11u = self.gate_to_freq(
-            ho,
-            g11,
-            w,
-            nfft,
-            nf
-        )
-
-        # ------------------------------------------------------------
-        # S21 = sqrt( Gamma_far / Gamma_L * (1 - S11^2) )
-        # ------------------------------------------------------------
-
-        S21sq = (Go / gamma_l) * (1.0 - S11u*S11u)
-
-        S21sq = np.where(
-            np.abs(S21sq) < 1e-20,
-            1e-20 + 0j,
-            S21sq
-        )
-
-        S21u = self.complex_sqrt_half_phase(
-            S21sq,
-            fu
-        )
-
-        # Verification de la racine
-        print(
-            "Erreur max racine =",
-            np.max(np.abs(S21u*S21u - S21sq))
-        )
-
-        # ------------------------------------------------------------
-        # Retour sur la grille de frequence d'origine
-        # ------------------------------------------------------------
-
-        def samp(Y):
-
-            return (
-                np.interp(
-                    freq,
-                    fu,
-                    np.real(Y)
-                )
-                +
-                1j*np.interp(
-                    freq,
-                    fu,
-                    np.imag(Y)
-                )
+        for column, var in enumerate((z_var, d_var, l_var)):
+            ttk.Label(self.result_frame, textvariable=var).grid(
+                row=row, column=column, sticky="w", padx=10
             )
 
-        s11 = samp(S11u)
+        self.port_result_rows[port] = (z_var, d_var, l_var)
 
-        s21 = samp(S21u)
+    def set_result_row(self, port, impedance, delay_ps, source=None):
+        """Met a jour Z, TTD et longueur d'une ligne de resultats."""
 
-        # Fixture suppose reciproque et symetrique (une seule mesure
-        # 1 port ne permet pas de separer S22 de S11).
-        s22 = s11.copy()
+        self.create_port_result_row(port)
+        z_var, d_var, _ = self.port_result_rows[port]
+        name = self.row_name(port)
+        suffix = f"  [{source}]" if source else ""
 
-        s12 = s21.copy()
+        z_var.set(f"{name} Z = {impedance:.2f} Ohm")
+        d_var.set(f"{name} TTD = {delay_ps:.2f} ps{suffix}")
 
-        s = np.zeros(
-            (
-                len(freq),
-                2,
-                2
-            ),
-            dtype=complex
-        )
+        self.row_delays[port] = delay_ps
+        self.refresh_length_labels()
 
-        s[:,0,0] = s11
-        s[:,1,1] = s22
-        s[:,1,0] = s21
-        s[:,0,1] = s12
+    def refresh_length_labels(self):
+        """Recalcule les longueurs affichees (appele quand eps_r change)."""
 
-        net = rf.Network(
-            frequency=ntwk.frequency,
-            s=s,
-            z0=z0_ref
-        )
+        eps = self.eps_r_value()
 
-        k_print = min(100, len(freq) - 1)
+        for port, delay_ps in getattr(self, "row_delays", {}).items():
+            rows = self.port_result_rows.get(port)
+            if rows is None or delay_ps is None:
+                continue
 
-        print(
-            f"S21 @{k_print} =",
-            s[k_print,1,0]
-        )
+            length_mm = afr_metrics.physical_length(delay_ps * 1e-12, eps) * 1e3
+            rows[2].set(f"{self.row_name(port)} Length = {length_mm:.2f} mm (εr = {eps:g})")
 
-        # ------------------------------------------------------------
-        # Impedance caracteristique (type TDR) a partir de la reflexion
-        # proche : Z = Z0 (1 + S11) / (1 - S11)
-        # ------------------------------------------------------------
+    def calculate_reflection_fixtures(self):
+        """OPEN / SHORT -> fixtures, puis combinaison OPEN + SHORT par cote."""
 
-        z_near = self.s11_to_z(
-            s11,
-            z0_ref
-        )
+        reflection_keys = [
+            key for key in self.standard_files
+            if key.startswith(("OPEN_", "SHORT_"))
+        ]
 
-        z_mean = float(
-            np.mean(
-                np.real(z_near)
+        output_dir = Path(self.rf_output_dir.get())
+        form = self.export_format.get()
+
+        for key in reflection_keys:
+
+            result = self.build_afr_s2p_from_s1p(self.standard_files[key], reflect_type=key)
+
+            self.fixture_results[key] = result
+            self.converted_networks[key] = result.network
+            self.half_networks[f"{key}_HALF"] = result.network
+            self.extracted_info[key] = result.as_info()
+
+            converted_path = str(
+                afr_io.write_network(result.network, output_dir / f"{key}_CONVERTED", form)
             )
-        )
+            self.converted_files[key] = converted_path
 
-        # ------------------------------------------------------------
-        # Delai de propagation : pente de la phase de S21
-        # (coherent avec build_half_thru), en ps
-        # ------------------------------------------------------------
+            if key.startswith("OPEN_"):
+                self.converted_open_files[key] = converted_path
+            else:
+                self.converted_short_files[key] = converted_path
 
-        phase_s21 = np.unwrap(
-            np.angle(S21u)
-        )
+        # OPEN + SHORT du meme fixture : extraction combinee
+        sides = sorted({key.split("_", 1)[1] for key in reflection_keys})
 
-        slope = np.polyfit(
-            fu,
-            phase_s21,
-            1
-        )[0]
+        for side in sides:
 
-        delay = -slope / (2.0*np.pi) * 1e12
+            open_key, short_key = f"OPEN_{side}", f"SHORT_{side}"
 
-        if not np.isfinite(delay) or delay <= 0:
-            delay = tau * 1e12
+            if open_key not in self.standard_files or short_key not in self.standard_files:
+                continue
 
-        print("AFR Impedance =", z_mean, "Ohm")
-        print("AFR Delay =", delay, "ps")
-
-        return net, z_mean, delay
-
-
-    def detect_touchstone_format(self, filename):
-        with open(
-            filename,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as touchstone_file:
-
-            for line in touchstone_file:
-                line = line.strip().upper()
-
-                if not line.startswith("#"):
-                    continue
-
-                if " RI " in f" {line} ":
-                    return "RI"
-
-                if " MA " in f" {line} ":
-                    return "MA"
-
-                if " DB " in f" {line} ":
-                    return "DB"
-
-        return "UNKNOWN"
-
-    def apply_filter(self, signal, frequency=None):
-
-        if not self.enable_filter.get():
-            return signal
-
-        method = self.filter_method.get()
-
-        # =====================================
-        # NONE
-        # =====================================
-
-        if method == "None":
-            return signal
-
-        # =====================================
-        # Savitzky-Golay
-        # =====================================
-
-        elif method == "Savitzky-Golay":
-
-            real = savgol_filter(
-                np.real(signal),
-                self.filter_window.get(),
-                self.filter_order.get()
-            )
-
-            imag = savgol_filter(
-                np.imag(signal),
-                self.filter_window.get(),
-                self.filter_order.get()
-            )
-
-            return real + 1j*imag
-
-        # =====================================
-        # Gaussian
-        # =====================================
-
-        elif method == "Gaussian":
-
-            real = gaussian_filter1d(
-                np.real(signal),
-                self.filter_sigma.get()
-            )
-
-            imag = gaussian_filter1d(
-                np.imag(signal),
-                self.filter_sigma.get()
-            )
-
-            return real + 1j*imag
-
-        # =====================================
-        # Median
-        # =====================================
-
-        elif method == "Median":
-
-            real = medfilt(
-                np.real(signal),
-                self.filter_window.get()
-            )
-
-            imag = medfilt(
-                np.imag(signal),
-                self.filter_window.get()
-            )
-
-            return real + 1j*imag
-
-        # =====================================
-        # Moving Average
-        # =====================================
-
-        elif method == "Moving Average":
-
-            w = self.filter_window.get()
-
-            kernel = np.ones(w) / w
-
-            real = np.convolve(
-                np.real(signal),
-                kernel,
-                mode="same"
-            )
-
-            imag = np.convolve(
-                np.imag(signal),
-                kernel,
-                mode="same"
-            )
-
-            return real + 1j*imag
-
-        # =====================================
-        # Butterworth
-        # =====================================
-
-        elif method == "Butterworth":
-
-            b, a = butter(
-                4,
-                self.filter_cutoff.get()
-            )
-
-            real = filtfilt(
-                b,
-                a,
-                np.real(signal)
-            )
-
-            imag = filtfilt(
-                b,
-                a,
-                np.imag(signal)
-            )
-
-            return real + 1j*imag
-
-        # =====================================
-        # FIR Low Pass
-        # =====================================
-
-        elif method == "FIR Low Pass":
-
-            b = firwin(
-                31,
-                self.filter_cutoff.get()
-            )
-
-            real = filtfilt(
-                b,
-                [1.0],
-                np.real(signal)
-            )
-
-            imag = filtfilt(
-                b,
-                [1.0],
-                np.imag(signal)
-            )
-
-            return real + 1j*imag
-
-        # =====================================
-        # Wiener
-        # =====================================
-
-        elif method == "Wiener":
-
-            real = wiener(
-                np.real(signal),
-                self.filter_window.get()
-            )
-
-            imag = wiener(
-                np.imag(signal),
-                self.filter_window.get()
-            )
-
-            return real + 1j*imag
-
-        # =====================================
-        # Wavelet
-        # =====================================
-
-        elif method == "Wavelet":
-
-            coeffs_r = pywt.wavedec(
-                np.real(signal),
-                "db4"
-            )
-
-            coeffs_i = pywt.wavedec(
-                np.imag(signal),
-                "db4"
-            )
-
-            coeffs_r[1:] = [
-                np.zeros_like(c)
-                for c in coeffs_r[1:]
-            ]
-
-            coeffs_i[1:] = [
-                np.zeros_like(c)
-                for c in coeffs_i[1:]
-            ]
-
-            real = pywt.waverec(
-                coeffs_r,
-                "db4"
-            )
-
-            imag = pywt.waverec(
-                coeffs_i,
-                "db4"
-            )
-
-            return (
-                real[:len(signal)]
-                +
-                1j*imag[:len(signal)]
-            )
-
-        # =====================================
-        # Phase Only
-        # =====================================
-
-        elif method == "Phase Only":
-
-            mag = np.abs(signal)
-
-            phase = np.unwrap(
-                np.angle(signal)
-            )
-
-            phase = savgol_filter(
-                phase,
-                self.filter_window.get(),
-                self.filter_order.get()
-            )
-
-            return mag * np.exp(
-                1j*phase
-            )
-
-        # =====================================
-        # Vector Fitting
-        # =====================================
-
-        elif method == "Vector Fitting":
+            combined_key = f"REFLECT_{side}"
 
             try:
-
-                if frequency is None:
-                    return signal
-
-                freq_obj = rf.Frequency.from_f(
-                    frequency,
-                    unit="hz"
+                result = self.build_open_short_fixture(
+                    self.standard_files[open_key],
+                    self.standard_files[short_key],
                 )
+            except Exception as error:
+                log.warning("Combinaison OPEN/SHORT %s impossible : %s", side, error)
+                continue
 
-                s = np.zeros(
-                    (
-                        len(signal),
-                        1,
-                        1
-                    ),
-                    dtype=complex
-                )
+            self.fixture_results[combined_key] = result
+            self.converted_networks[combined_key] = result.network
+            self.half_networks[f"{combined_key}_HALF"] = result.network
+            self.extracted_info[combined_key] = result.as_info()
+            self.converted_files[combined_key] = str(
+                afr_io.write_network(result.network, output_dir / f"{combined_key}_CONVERTED", form)
+            )
 
-                s[:,0,0] = signal
+            quality = result.quality
+            log.info(
+                "OPEN/SHORT %s : ecart S21 open/short = %.2f dB / %.1f deg",
+                side,
+                quality.get("open_short_mag_db", float("nan")),
+                quality.get("open_short_phase_deg", float("nan")),
+            )
 
-                net = rf.Network(
-                    frequency=freq_obj,
-                    s=s
-                )
+        # Sans 2x-thru, les fixtures A / B viennent des reflexions
+        if self.fixture_a_network is None:
+            self.fixture_a_network = self.reflect_fixture_network("A")
 
-                vf = VectorFitting(net)
+        if self.fixture_b_network is None:
+            net_b = self.reflect_fixture_network("B")
+            self.fixture_b_network = afr_thru.port_swap(net_b) if net_b is not None else None
 
-                vf.vector_fit()
+    def update_fixture_result_labels(self):
+        """Lignes 'Fixture A / B' : Z, TTD et longueur issus des reflexions."""
 
-                net_fit = vf.get_model_response(
-                    0,
-                    0
-                )
+        for side in ("A", "B"):
 
-                return net_fit
+            for key in (f"REFLECT_{side}", f"OPEN_{side}", f"SHORT_{side}"):
 
-            except Exception as e:
+                info = self.extracted_info.get(key)
 
-                print(
-                    "Vector fitting failed:",
-                    e
-                )
+                if info and "z" in info:
+                    self.set_result_row(f"Fixture {side}", info["z"], info["delay"], key)
+                    break
 
-                return signal
+        self.refresh_length_labels()
 
-        return signal
+    def run_batch(self):
+        """Page 6 : de-embedding de tous les fichiers DUT d'un dossier."""
 
-    # ======================================
-    # Half Thru
-    # ======================================
-    def build_half_thru(self, thru_file,source_key="THRU_LINE1"):
+        input_dir = Path(self.batch_in.get().strip())
 
-        thru = rf.Network(thru_file)
+        if not input_dir.is_dir():
+            messagebox.showwarning("Invalid folder", "Choose a valid input directory.")
+            return
 
-        print("THRU START =", thru.frequency.f[0]/1e9)
-        print("THRU STOP  =", thru.frequency.f[-1]/1e9)
+        output_text = self.batch_out.get().strip()
+        output_dir = Path(output_text) if output_text else input_dir / "deembedded"
 
-        DEBUG_PLOT = False
+        fixture_in = self.fixture_a_network if self.apply_a.get() else None
+        fixture_out = self.fixture_b_network if self.apply_b.get() else None
 
- 
-
-        fmt = self.detect_touchstone_format(
-            thru_file
-        )
-
-        print(
-            f"Format détecté : {fmt}"
-        )
-
-       
-
-        print("================================")
-        # print("ENTER build_half_thru")
-        print("FILE =", thru_file)
-        print("================================")
-
-
-        print("================================")
-        print("FREQUENCY RANGE")
-        print("================================")
-        print("Start =", thru.frequency.f[0]/1e9, "GHz")
-        print("Stop  =", thru.frequency.f[-1]/1e9, "GHz")
-        print("Points =", len(thru.frequency.f))
-
-        freq = thru.frequency
-        freq_hz = freq.f
-
-        s11 = thru.s[:,0,0]
-        s21 = thru.s[:,1,0]
-        s12 = thru.s[:,0,1]
-        s22 = thru.s[:,1,1]
-
-        s11 = self.apply_filter(s11,freq_hz)
-        s21 = self.apply_filter(s21,freq_hz)
-        s12 = self.apply_filter(s12,freq_hz)
-        s22 = self.apply_filter(s22,freq_hz)
-        # if self.enable_interpolation.get():
-
-        #     freq_uniform, s21 = self.uniform_grid_with_dc(freq_hz,s21)
-        #     _, s11 = self.uniform_grid_with_dc(freq_hz,s11)
-        #     _, s12 = self.uniform_grid_with_dc(freq_hz,s12)
-        #     _, s22 = self.uniform_grid_with_dc(freq_hz,s22)
-        # freq_hz = freq_uniform
-        freq_hz = freq.f
-        self.validate_network(
-            thru.s
-        )
-
-
-        if thru.nports != 2:
-            print(
-                f"Erreur : fichier {thru_file} n'est pas un S2P "
-                f"(nombre de ports = {thru.nports})"
+        if fixture_in is None and fixture_out is None:
+            messagebox.showwarning(
+                "Fixtures unavailable",
+                "Calculate the fixture characteristics (page 3) and select "
+                "Apply Fixture A / B (page 4) before running a batch.",
             )
             return
 
-
-        print("Nombre de ports :", thru.nports)
-        print("Shape S :", thru.s.shape)
-        print("Shape A :", thru.a.shape)
-        
-
-        sym_error = np.max(
-            np.abs(
-                thru.s[:,0,0]
-                -
-                thru.s[:,1,1]
+        try:
+            items = afr_deembed.batch_deembed(
+                input_dir,
+                output_dir,
+                self.batch_pattern.get().strip() or "*.s2p",
+                fixture_in,
+                fixture_out,
+                form=self.export_format.get(),
             )
-        )
-
-
-
-
-        # ======================================
-        # Analyse temporelle S21
-        # ======================================
-
-        s21_window = s21 * np.hanning(len(s21))
-
-        h = np.fft.ifft(s21_window)
-        if self.DEBUG_PLOT:
-
-            plt.figure()
-            plt.plot(np.abs(h))
-            plt.title("Impulse Response S21")
-            plt.xlabel("Time Index")
-            plt.ylabel("Amplitude")
-            plt.grid(True)
-            # plt.show()
-        
-            plt.show()
-
-        peak = np.argmax(np.abs(h))
-
-        print("Peak =", peak)
-        print("Nb points =", len(h))
-
-        phase = np.unwrap(np.angle(s21))
-
-        # freq_hz = freq.f
-
-        tau = -np.gradient(
-            phase,
-            2*np.pi*freq_hz
-        )
-
-        tau_mean = np.mean(tau)
-
-        if self.DEBUG_PLOT:
-    
-            plt.figure()
-
-            plt.plot(freq_hz/1e9, tau*1e12)
-
-            plt.title("Group Delay")
-
-            plt.xlabel("GHz")
-
-            plt.ylabel("ps")
-
-            plt.grid(True)
-
-    
-            plt.show()
-
-
-
-        print("Delay total =", tau_mean * 1e12, "ps")
-
-        tau_half = tau_mean / 2
-
-        print("Half delay =", tau_half * 1e12, "ps")
-
-
-        print("AFR-LIKE EXTRACTION")
-
-    
-        print("AFR-LIKE EXTRACTION")
-
-        # ==========================
-        # HALF S11
-        # ==========================
-
-        s11 = thru.s[:,0,0]
-
-        xt11 = self.frequency_to_time(
-            s11
-        )
-
-        peak11 = np.argmax(
-            np.abs(xt11)
-        )
-
-        print("Peak S11 =", peak11)
-
-        s11_half = self.gate_response(
-            s11,
-            peak11,
-            15
-        )
-
-        # ==========================
-        # HALF S22
-        # ==========================
-
-        s22 = thru.s[:,1,1]
-
-        xt22 = self.frequency_to_time(
-            s22
-        )
-
-        peak22 = np.argmax(
-            np.abs(xt22)
-        )
-
-        print("Peak S22 =", peak22)
-
-        s22_half = self.gate_response(
-            s22,
-            peak22,
-            15
-        
-        )
-
-        s21_2x = thru.s[:,1,0]
-
-
-
-        rad = s21_2x * (
-            1.0
-            -
-            s11_half*s11_half
-        )
-        rad = np.where(
-            np.abs(rad) < 1e-20,
-            1e-20 + 0j,
-            rad
-        )
-
-        # s21_half = np.sqrt(rad)
-
-        mag = np.sqrt(
-            np.abs(rad)
-        )
-
-        phase_half = 0.5 * np.unwrap(
-            np.angle(rad)
-        )
-
-        s21_half = (
-            mag
-            *
-            np.exp(
-                1j * phase_half
-            )
-        )
-
-
-        check = s21_half * s21_half
-
-    
-
-        if self.DEBUG_PLOT:
-            plt.figure()
-            
-            plt.plot(
-                freq_hz/1e9,
-                20*np.log10(np.abs(rad)),
-                label="Original"
-            )
-
-            plt.plot(
-                freq_hz/1e9,
-                20*np.log10(np.abs(check)),
-                '--',
-                label="Half × Half"
-            )
-
-            plt.legend()
-            plt.grid(True)
-
-           
-            plt.show()
-
-
-        print(
-            "Erreur max racine =",
-            np.max(np.abs(check - rad))
-        )
-
-
-
-        if self.DEBUG_PLOT:
-            plt.figure()
-   
-
-            plt.plot(
-                freq_hz/1e9,
-                np.angle(s21_half, deg=True),
-                label="Phase HALF brute"
-            )
-
-            plt.grid(True)
-            plt.legend()
-            # plt.show()
-
-        
-            plt.show()
-        if self.DEBUG_PLOT:
-            plt.figure()
-
-            plt.plot(
-            freq_hz/1e9,
-            np.unwrap(
-                np.angle(s21_half)
-            ) * 180/np.pi,
-            label="Phase HALF unwrap"
-        )
-
-            plt.grid(True)
-            plt.legend()
-            plt.show()
-       
-
-
-        if self.DEBUG_PLOT:
-            plt.figure()
-
-            plt.plot(
-                freq_hz/1e9,
-                np.unwrap(np.angle(rad))*180/np.pi,
-                label="rad"
-            )
-
-            plt.plot(
-            freq_hz/1e9,
-            np.unwrap(np.angle(s21_half))*180/np.pi,
-            label="sqrt(rad)"
-        )
-
-            plt.legend()
-            plt.grid(True)
-            plt.show()
-
-
-
-        half_s = np.zeros_like(
-            thru.s
-        )
-
-        # half_s[:,0,0] = s11_half
-
-
-        if self.DEBUG_PLOT:
-            plt.figure()
-
-            plt.plot(
-                freq_hz/1e9,
-                20*np.log10(
-                    np.maximum(
-                        np.abs(s11),
-                        1e-15
-                    )
-                ),
-                label="THRU S11"
-            )
-
-            plt.plot(
-                freq_hz/1e9,
-                20*np.log10(
-                    np.maximum(
-                        np.abs(s11_half),
-                        1e-15
-                    )
-                ),
-                label="HALF S11"
-            )
-
-            plt.legend()
-            plt.grid(True)
-            plt.title("S11 THRU vs HALF")
-            plt.show()
-
-        # half_s[:,1,1] = s11_half
-
-        half_s[:,0,0] = s11_half
-        half_s[:,1,1] = s22_half
-
-
-        half_s[:,1,0] = s21_half
-        half_s[:,0,1] = s21_half
-
-        print("CHECK HALF REFLECTIONS")
-
-        print(
-            "Max |S11_half-S22_half| =",
-            np.max(
-                np.abs(
-                    s11_half - s22_half
-                )
-            )
-        )
-
-        half_network = thru.copy()
-
-        half_network.s = half_s
-
-
-        cont = self.continuity_metric(
-            half_network.s
-        )
-
-        print(
-            "CONTINUITY =",
-            cont
-        )
-
-        half_abcd = half_network.a
-
-        max_error = 0
-
-        for k in range(len(freq)):
-
-            reconstructed = (
-                half_abcd[k]
-                @
-                half_abcd[k]
-            )
-
-            err = np.max(
-                np.abs(
-                    reconstructed
-                    -
-                    thru.a[k]
-                )
-            )
-
-            max_error = max(
-                max_error,
-                err
-            )
-
-        print(
-            "MAX HALF×HALF ERROR =",
-            max_error
-        )
-                
-
-
-
-       
-        # =================================
-        # Reconstruction THRU
-        # =================================
-
-        thru_rebuilt = thru.copy()
-
-        rebuilt_abcd = np.zeros_like(thru.a)
-
-        for k in range(len(freq)):
-
-            rebuilt_abcd[k] = (
-                half_abcd[k]
-                @
-                half_abcd[k]
-            )
-
-        thru_rebuilt.a = rebuilt_abcd
-
-        print("================================")
-        print("THRU RECONSTRUCTION TEST")
-        print("================================")
-
-        print(
-            "Max Reconstruction Error =",
-            np.max(
-                np.abs(
-                    thru_rebuilt.s
-                    -
-                    thru.s
-                )
-            )
-        )
-
-
-        if self.DEBUG_PLOT:
-            plt.figure()
-
-            plt.plot(
-                freq.f/1e9,
-                20*np.log10(
-                    np.abs(
-                        thru.s[:,1,0]
-                    )
-                ),
-                label="Original THRU"
-            )
-
-            plt.plot(
-                freq.f/1e9,
-                20*np.log10(
-                    np.abs(
-                        thru_rebuilt.s[:,1,0]
-                    )
-                ),
-                '--',
-                label="HALF x HALF"
-            )
-
-            plt.legend()
-            plt.grid(True)
-            plt.title("THRU Reconstruction Check")
-            plt.xlabel("Frequency (GHz)")
-            plt.ylabel("S21 (dB)")
-            plt.show()
-
-
-
-        print("================================")
-        print("VERIFICATION HALF THRU")
-        print("================================")
-
-        print("ABCD THRU")
-        print(thru.a[0])
-
-        print("ABCD HALF")
-        print(half_abcd[0])
-
-        print("DIFFERENCE MAX")
-        print(np.max(np.abs(thru.a[0] - half_abcd[0])))
-
-        test = half_abcd[0] @ half_abcd[0]
-
-        print("ERREUR RECONSTRUCTION")
-        print(np.max(np.abs(test - thru.a[0])))
-
-    
-        # half_network = half_network.copy()
-
-        # half_network.a = half_abcd
-
-        # half_network = thru.copy()
-
-        # half_network.a = half_abcd
-        zin = half_network.z[:,0,0]
-        zout = half_network.z[:,1,1]
-
-        z1 = np.mean(np.real(zin))
-        z2 = np.mean(np.real(zout))
-
-        phase = np.unwrap(
-            np.angle(
-                half_network.s[:,1,0]
-            )
-        )
-
-        print("================================")
-        print("GRADIENT CHECK")
-        print("================================")
-        print("len(phase)   =", len(phase))
-        print("len(freq_hz) =", len(freq_hz))
-
-
-        
-        freq_delay = thru.frequency.f
-
-        delay = (
-            np.mean(
-                -np.gradient(
-                    phase,
-                    2*np.pi*freq_delay
-                )
-            ) * 1e12
-        ) 
-
-        information = {
-            "z1": z1,
-            "z2": z2,
-            "delay1": delay,
-            "delay2": delay
-        }
-
-        check = np.zeros_like(thru.a)
-
-        for k in range(len(freq)):
-
-            check[k] = (
-                half_network.a[k]
-                @
-                np.linalg.inv(
-                    half_network.a[k]
-                )
-            )
-
-        net_check = thru.copy()
-        net_check.a = check
-
-        if self.DEBUG_PLOT:                  
-
-            plt.figure()
-
-            plt.plot(
-                freq.f/1e9,
-                20*np.log10(
-                    np.abs(net_check.s[:,1,0])
-                )
-            )
-
-            plt.grid(True)
-            plt.title("HALF x INV(HALF)")
-            plt.show()
-
-       
-
-        print("THRU ABCD ")
-        print(thru.a[0])
-
-        print("HALF ABCD ")
-        print(half_network.a[0])
-
-        print("S THRU")
-        print(thru.s[0])
-
-        print("S HALF")
-        print(half_network.s[0])
-
-        max_error = 0
-
-        for k in range(len(freq)):
-
-            reconstructed = (
-                half_abcd[k]
-                @
-                half_abcd[k]
-            )
-
-            error = np.max(
-                np.abs(
-                    reconstructed
-                    -
-                    thru.a[k]
-                )
-            )
-
-            max_error = max(max_error, error)
-
-            print(
-                f"Erreur reconstruction {k} = {error:.3e}"
-            )
-
-        print("================================")
-        print("MAX RECONSTRUCTION ERROR =", max_error)
-        print("================================")
-
-                    
-        # Vérification de passivité
-
-        for k in range(len(freq)):
-
-            eig = np.linalg.eigvals(
-                half_network.s[k].conj().T
-                @
-                half_network.s[k]
-            )
-
-            if np.max(np.real(eig)) > 1.05:
-
-                print(
-                    f"Attention : réseau potentiellement non passif "
-                    f"à la fréquence {freq.f[k]/1e9:.3f} GHz"
-                )
-
-
-        print("THRU original")
-        print(thru.s[0])
-
-        print("HALF THRU")
-        print(half_network.s[0])
-        # name = Path(thru_file).stem(
-        #     thru_file
-        # ).split(".")[0]
-        name = Path(thru_file).stem
-
-
-
-        print("ABCD THRU")
-        print(thru.a[0])
-
-        print("ABCD HALF")
-        print(half_abcd[0])
-
-        print("Différence")
-        print(np.max(np.abs(thru.a[0] - half_abcd[0])))
-
-        print("S THRU AVANT EXPORT")
-        print(thru.s[0])
-
-        print("S HALF AVANT EXPORT")
-        print(half_network.s[0])
-
-
-
-        half_transpose = half_network.copy()
-
-        S = half_network.s.copy()
-
-        Sswap = np.zeros_like(S)
-
-        Sswap[:,0,0] = S[:,1,1]
-        Sswap[:,1,1] = S[:,0,0]
-        Sswap[:,0,1] = S[:,1,0]
-        Sswap[:,1,0] = S[:,0,1]
-
-        half_transpose.s = Sswap
-
- 
-
-
-        # half_transpose = half_network.copy()
-
-        # abcd_out = np.zeros_like(
-        #     half_network.a
-        # )
-
-        # for k in range(len(freq)):
-
-        #     A = half_network.a[k]
-
-        #     abcd_out[k] = np.array([
-        #         [A[1,1], A[0,1]],
-        #         [A[1,0], A[0,0]]
-        #     ])
-
-        # half_transpose.a = abcd_out
-
-        print("================================")
-        print("HALF OUT = PORT SWAP")
-        print("================================")
-
-        print("ABCD HALF IN")
-        print(half_network.a[0])
-
-        print("ABCD HALF OUT")
-        print(half_transpose.a[0])
-
-    
-        print("HALF IN S")
-        print(half_network.s[0])
-
-        print("HALF OUT S")
-        print(half_transpose.s[0])
-
-
-        half_file_in = os.path.join(
-            self.rf_output_dir.get(),
-            f"{source_key}_HALF_IN"
-        )
-
-        half_file_out = os.path.join(
-            self.rf_output_dir.get(),
-            f"{source_key}_HALF_OUT"
-        )
-
-        print("ARRIVE A LA SAUVEGARDE HALF IN")
-        print(half_file_in)
-
-        print("ARRIVE A LA SAUVEGARDE HALF OUT")
-        print(half_file_out)
-
-
-        # sauvegarde côté entrée
-        half_network.write_touchstone(
-            half_file_in,
-            form=self.export_format.get()
-        )
-
-        # sauvegarde côté sortie
-        half_transpose.write_touchstone(
-            half_file_out,
-            form=self.export_format.get()
-        )
-
-        # self.files["HALF_THRU_IN"] = half_file_in + ".s2p"
-        # self.files["HALF_THRU_OUT"] = half_file_out + ".s2p"
-
-        self.converted_files[f"{source_key}_IN"] = half_file_in + ".s2p"
-
-        self.converted_files[f"{source_key}_OUT"] = half_file_out + ".s2p"
-
-
-
-        self.half_thru_file_in = half_file_in + ".s2p"
-        self.half_thru_file_out = half_file_out + ".s2p"
-
-        self.converted_files[
-            f"{source_key}_IN"
-        ] = half_file_in + ".s2p"
-
-        self.converted_files[
-            f"{source_key}_OUT"
-        ] = half_file_out + ".s2p"
-
-
-
-
-        print("HALF INPUT  :", self.half_thru_file_in)
-        print("HALF OUTPUT :", self.half_thru_file_out)
-
-
-        # print(
-        #     f"HALF_{name}.s2p sauvegardé dans {self.rf_output_dir.get}"
-        # )
-        print(
-            f"HALF_{name}.s2p sauvegardé dans "
-            f"{self.rf_output_dir.get()}"
-        )
-
-        print("HALF THRU exporté")
-        # print("THRU_LINE1 remplacé par :")
-        # print(self.files["THRU_LINE1"])
-        print("THRU source :", source_key)
-        print("Fichier chargé :", self.standard_files[source_key])
-
-        
-
-
-
-
-        return (
-            half_network,
-            half_transpose,
-            information
-        )
-
-
-        
-
-    def continuity_metric(self, S):
-    
-            if len(S) < 2:
-                return 0
-    
-            d = np.linalg.norm(
-                np.diff(
-                    S,
-                    axis=0
-                ).reshape(
-                    len(S)-1,
-                    -1
-                ),
-                axis=1
-            )
-    
-            n = np.maximum(
-                np.linalg.norm(
-                    S[:-1].reshape(
-                        len(S)-1,
-                        -1
-                    ),
-                    axis=1
-                ),
-                1e-15
-            )
-    
-            return np.max(d/n)
-    
-    def max_singular_value(self,S):
-    
-            m = 0.0
-    
-            for sample in S:
-    
-                m = max(
-                    m,
-                    float(
-                        np.max(
-                            np.linalg.svd(
-                                sample,
-                                compute_uv=False
-                            )
-                        )
-                    )
-                )
-    
-            return m
-    def validate_network(self, S):
-    
-            sym = np.max(
-                np.abs(
-                    S[:,0,0]
-                    -
-                    S[:,1,1]
-                )
-            )
-    
-            rec = np.max(
-                np.abs(
-                    S[:,0,1]
-                    -
-                    S[:,1,0]
-                )
-            )
-    
-            sigma = self.max_singular_value(S)
-    
-            print("Symmetry Error =", sym)
-            print("Reciprocity Error =", rec)
-            print("Max Singular Value =", sigma)
-    
-            if sigma > 1.0:
-    
-                print(
-                    "WARNING : réseau potentiellement non passif"
-                )
-    def extract_ttd(self, s21, freq):
-
-        s21_window = s21 * np.hanning(len(s21))
-
-        h = np.fft.ifft(s21_window)
-
-        peak = np.argmax(np.abs(h))
-
-        df = freq[1] - freq[0]
-
-        dt = 1/(len(freq)*df)
-
-        delay = peak*dt
-
-        return delay
-
-    def extract_average_z(self, net):
-
-        zin = net.z[:,0,0]
-
-        return np.mean(
-                np.real(zin)
-            )    
-
- # ======================================
-# Final Deembedding
-# ======================================
-
-    def remove_fixture( self, dut_file, fixture_in, fixture_out):
-
-        dut = rf.Network(dut_file)
-
-        result_abcd = np.zeros_like(dut.a)
-
-        for k in range(len(dut.frequency)):
-
-            cond_in = np.linalg.cond(
-                fixture_in.a[k]
-            )
-
-            cond_out = np.linalg.cond(
-                fixture_out.a[k]
-
-            )
-
-            cond = max(cond_in, cond_out)
-            
-
-            if cond > 50:
-                print(
-                    f"Conditionnement = {cond:.2e} "
-                    f"à {dut.frequency.f[k]/1e9:.3f} GHz"
-                )
-
-            cond_in = np.linalg.cond(
-                fixture_in.a[k]
-            )
-
-            cond_out = np.linalg.cond(
-                fixture_out.a[k]
-)
-
-            print(
-                f"{dut.frequency.f[k]/1e9:.3f} GHz  ->  Cond = {cond:.2e}"
-            )
-
-            cond_in = np.linalg.cond(
-                fixture_in.a[k]
-            )
-
-            cond_out = np.linalg.cond(
-                fixture_out.a[k]
-            )
-
-            if cond_in > 100:
-
-                print(
-                    f"WARNING Fixture IN "
-                    f"{dut.frequency.f[k]/1e9:.3f} GHz "
-                    f"Cond={cond_in:.2e}"
-                )
-
-            if cond_out > 100:
-
-                print(
-                    f"WARNING Fixture OUT "
-                    f"{dut.frequency.f[k]/1e9:.3f} GHz "
-                    f"Cond={cond_out:.2e}"
-                )
-
-
-            fixture_in_inv = np.linalg.inv(
-                fixture_in.a[k]
-            )
-
-            fixture_out_inv = np.linalg.inv(
-                fixture_out.a[k]
-            )
-            if np.linalg.cond(fixture_in.a[k]) > 1e8:
-                fixture_in_inv = np.linalg.pinv(
-                    fixture_in.a[k]
-                )
+        except Exception as error:
+            messagebox.showerror("Batch error", str(error))
+            return
+
+        lines = [f"Found {len(items)} file(s). Output directory: {output_dir}", ""]
+
+        for item in items:
+            if item.ok:
+                lines.append(f"[OK ] {item.source.name} -> {item.output.name}")
             else:
-                fixture_in_inv = np.linalg.inv(
-                    fixture_in.a[k]
-                )
+                lines.append(f"[ERR] {item.source.name} : {item.message}")
 
-            if np.linalg.cond(fixture_out.a[k]) > 1e8:
-                fixture_out_inv = np.linalg.pinv(
-                    fixture_out.a[k]
-                )
-            else:
-                fixture_out_inv = np.linalg.inv(
-                    fixture_out.a[k]
-                )
+        failed = sum(1 for item in items if not item.ok)
+        lines.append("")
+        lines.append(f"Done: {len(items) - failed} processed, {failed} failed.")
 
-            result_abcd[k] = (
-                fixture_in_inv
-                @ dut.a[k]
-                @ fixture_out_inv
-            )
+        self.batch_log.config(state="normal")
+        self.batch_log.delete("1.0", "end")
+        self.batch_log.insert("end", "\n".join(lines) + "\n")
+        self.batch_log.config(state="disabled")
 
-            # fixture_in_inv = np.linalg.inv(
-            #     fixture_in.a[k]
-            # )
-
-            # fixture_out_inv = np.linalg.inv(
-            #     fixture_out.a[k]
-            # )
-
-            result_abcd[k] = (
-                fixture_in_inv
-                @ dut.a[k]
-                @ fixture_out_inv
-            )
-
-
-            if k == 100:
-
-                dut_reconstructed = (
-                fixture_in.a[k]
-                @ result_abcd[k]
-                @ fixture_out.a[k]
-)
-
-                err = np.max(
-                    np.abs(
-                        dut_reconstructed
-                        -
-                        dut.a[k]
-                    )
-                )
-
-                print("RECONSTRUCTION ERROR =", err)
-
-        result = dut.copy()
-
-        result.a = result_abcd
-
-        if self.DEBUG_PLOT:
-
-            plt.figure()
-
-            plt.plot(
-                dut.frequency.f/1e9,
-                20*np.log10(np.abs(dut.s[:,1,0])),
-                label="Measured DUT"
-            )
-
-            plt.plot(
-                result.frequency.f/1e9,
-                20*np.log10(np.abs(result.s[:,1,0])),
-                label="Deembedded DUT"
-            )
-
-            plt.legend()
-
-            plt.grid(True)
-
-            plt.show()
-        return result
-
-    def s11_to_z(self, s11, z0):
-        denominator = 1.0 - s11
-
-        denominator = np.where(
-            np.abs(denominator) < EPS,
-            EPS + 0j,
-            denominator
-        )
-
-        return z0 * (1.0 + s11) / denominator
-
-
-    def z_to_s11(self, impedance, z0):
-        denominator = impedance + z0
-
-        denominator = np.where(
-            np.abs(denominator) < EPS,
-            EPS + 0j,
-            denominator
-        )
-
-        return (
-            impedance - z0
-        ) / denominator
-        
-
-        
-
+        self.status.set(f"Batch finished: {len(items) - failed} file(s) de-embedded.")
 
     def _build_page1(self):
         ttk.Label(self.page1, text="This 6 step wizard characterizes and removes the fixture effects from your measurements",
@@ -3306,6 +1690,7 @@ class AFRWizardComplete(tk.Tk):
 
        
         self.port_result_rows = {}
+        self.row_delays = {}
 
 
 
@@ -3320,6 +1705,11 @@ class AFRWizardComplete(tk.Tk):
         self.filter_method = tk.StringVar(value="Phase Only")
         r=ttk.Frame(td); r.pack(anchor="w"); ttk.Label(r,text="Step Rise Time:").pack(side="left")
         ttk.Entry(r,textvariable=self.step_rise,width=10).pack(side="left",padx=5); ttk.Label(r,text="ps").pack(side="left")
+        self.eps_r_eff = tk.DoubleVar(value=1.0)
+        self.eps_r_eff.trace_add("write", lambda *_: self.refresh_length_labels())
+        r_eps = ttk.Frame(td); r_eps.pack(anchor="w", pady=(4, 0))
+        ttk.Label(r_eps, text="Effective \u03b5r (line length = c \u00b7 TTD / \u221a\u03b5r):").pack(side="left")
+        ttk.Entry(r_eps, textvariable=self.eps_r_eff, width=10).pack(side="left", padx=5)
         # ==================================================
         # Filtering
         # ==================================================
@@ -3364,68 +1754,6 @@ class AFRWizardComplete(tk.Tk):
             command=self.open_plot_window
         ).pack(side="left")
 
-    def interpolate_complex_data(self,f,x,fu):
-        if len(f) < 5:
-
-            return (np.interp(fu, f, np.real(x))+1j*np.interp(fu, f, np.imag(x)))
-        method = self.interpolation_method.get()
-        print("Original Points =",len(f))
-
-        print(
-            "Interpolated Points =",
-            len(fu)
-        )
-        xr = np.real(x)
-        xi = np.imag(x)
-        if method == "Linear":
-            xr_new = np.interp(fu,f,xr)
-            xi_new = np.interp(fu,f,xi)
-        elif method == "PCHIP":
-            xr_new = PchipInterpolator(f,xr)(fu)
-            xi_new = PchipInterpolator(f,xi)(fu)
-        elif method == "Cubic Spline":
-            xr_new = CubicSpline(f,xr)(fu)
-            xi_new = CubicSpline(f,xi)(fu)
-        elif method == "Akima":
-            xr_new = Akima1DInterpolator(f,xr)(fu)
-            xi_new = Akima1DInterpolator(f,xi)(fu)
-        else:
-            xr_new = np.interp(fu,f,xr)
-            xi_new = np.interp(fu,f,xi)
-        return xr_new + 1j * xi_new
-    def create_port_result_row(self, port):
-        if port in self.port_result_rows:
-            return
-        row = len(self.port_result_rows)
-        z_var = tk.StringVar(value=f"Port {port} Z = --")
-        d_var = tk.StringVar(value=f"Port {port} TTD = --")
-
-        ttk.Label(
-            self.result_frame,
-            textvariable=z_var
-        ).grid(
-            row=row,
-            column=0,
-            sticky="w",
-            padx=10
-        )
-
-        ttk.Label(
-            self.result_frame,
-            textvariable=d_var
-        ).grid(
-            row=row,
-            column=1,
-            sticky="w",
-            padx=10
-        )
-
-        self.port_result_rows[port] = (
-            z_var,
-            d_var
-        )
-
-    
     def open_plot_window(self):
         """
         Ouvre une nouvelle fenêtre contenant :
@@ -4313,94 +2641,6 @@ class AFRWizardComplete(tk.Tk):
             )
 
 
-    def load_s2p(self, path):
-        path = Path(path)
-
-        if not path.is_file():
-            raise FileNotFoundError(path)
-
-        network = rf.Network(str(path))
-
-        if network.nports != 2:
-            raise ValueError(
-                f"{path.name} is not a 2-port Touchstone file."
-            )
-
-        frequency = np.asarray(
-            network.f,
-            dtype=float
-        )
-
-        s_parameters = np.asarray(
-            network.s,
-            dtype=complex
-        )
-
-        self.check_frequency_grid(frequency)
-
-        self.check_finite_complex(
-            s_parameters,
-            "S2P"
-        )
-
-        try:
-            z0 = float(
-                np.real(
-                    np.asarray(network.z0).flat[0]
-                )
-            )
-        except Exception:
-            z0 = 50.0
-
-        return frequency, s_parameters, z0
-
-
-    def load_s1p(self, path):
-        path = Path(path)
-
-        if not path.is_file():
-            raise FileNotFoundError(path)
-
-        network = rf.Network(str(path))
-
-        if network.nports != 1:
-            raise ValueError(
-                f"{path.name} is not a 1-port Touchstone file."
-            )
-
-        frequency = np.asarray(
-            network.f,
-            dtype=float
-        )
-
-        s11 = np.asarray(
-            network.s[:, 0, 0],
-            dtype=complex
-        )
-
-        self.check_frequency_grid(frequency)
-
-        self.check_finite_complex(
-            s11,
-            "S1P"
-        )
-
-        try:
-            z0 = float(
-                np.real(
-                    np.asarray(network.z0).flat[0]
-                )
-            )
-        except Exception:
-            z0 = 50.0
-
-        return frequency, s11, z0
-
-
-
-
-    
-
     def load_standard(self, key):
         filename = filedialog.askopenfilename(
             title=f"Load {key}",
@@ -4638,245 +2878,10 @@ class AFRWizardComplete(tk.Tk):
         
                 
 
-        z_var, d_var = self.port_result_rows[p1]
-
-        z_var.set(
-            f"Port {p1} Z = {information['z1']:.2f} Ohm"
-        )
-
-        d_var.set(
-            f"Port {p1} TTD = {information['delay1']:.2f} ps"
-        )
-
-        z_var, d_var = self.port_result_rows[p2]
-
-        z_var.set(
-            f"Port {p2} Z = {information['z2']:.2f} Ohm"
-        )
-
-        d_var.set(
-            f"Port {p2} TTD = {information['delay2']:.2f} ps"
-        )
+        self.set_result_row(p1, information["z1"], information["delay1"], key)
+        self.set_result_row(p2, information["z2"], information["delay2"], key)
+        self.extracted_info[key] = dict(information)
                 
-
-    def calculate_reflection_fixtures(self):
-
-       
-
-        reflection_keys = []
-
-        for key in self.standard_files:
-
-            if key.startswith("OPEN_"):
-                reflection_keys.append(key)
-
-            elif key.startswith("SHORT_"):
-                reflection_keys.append(key)
-
-        for key in reflection_keys:
-
-            if key not in self.standard_files:
-                continue
-
-            # La cle (OPEN_A, SHORT_B, ...) fixe le signe du standard
-            # (Gamma_L = +1 pour OPEN, -1 pour SHORT).
-            network, impedance, delay = (
-                self.build_afr_s2p_from_s1p(
-                    self.standard_files[key],
-                    reflect_type=key
-                )
-            )
-
-    
-
-            # self.converted_files[key] = network
-            self.converted_networks[key] = network
-            # self.converted_networks[key] = net
-
-            self.half_networks[f"{key}_HALF"] = network
-
-            self.extracted_info[key] = {
-                "z": impedance,
-                "delay": delay,
-            }
-
-
-            output_base = (
-                Path(self.rf_output_dir.get())
-                / f"{key}_CONVERTED"
-            )
-            converted_path = str(output_base) + ".s2p"
-            
-            self.converted_files[key] = converted_path
-            if key.startswith("OPEN_"):
-                self.converted_open_files[key] = converted_path
-
-            if key.startswith("SHORT_"):
-                self.converted_short_files[key] = converted_path
-
-            network.write_touchstone(
-                str(output_base),
-                form=self.export_format.get()
-            )
-            print("================================")
-            print("OPEN/SHORT CONVERTED FILES")
-            print("================================")
-    
-            for k,v in self.converted_files.items():
-                print(k, "=>", v)
-
-            
-
-            # output_base = Path(
-            #     self.rf_output_dir
-            # ) / f"{key}_CONVERTED"
-
-            # network.write_touchstone(
-            #     str(output_base),
-            #     form=self.export_format.get()
-            # )
-    def update_fixture_result_labels(self):
-        fixture_a_values = []
-        fixture_b_values = []
-        
-
-        for key in ("OPEN_A", "SHORT_A"):
-            data = self.extracted_info.get(key)
-
-            if data:
-                fixture_a_values.append(data)
-
-        for key in ("OPEN_B", "SHORT_B"):
-            data = self.extracted_info.get(key)
-
-            if data:
-                fixture_b_values.append(data)
-
-
-        thru_keys = [
-            k
-            for k in self.extracted_info
-            if k.startswith("THRU_")
-        ]
-
-        if len(thru_keys) > 0:
-            thru_1 = self.extracted_info[thru_keys[0]]
-        else:
-            thru_1 = None
-
-        if len(thru_keys) > 1:
-            thru_2 = self.extracted_info[thru_keys[1]]
-        else:
-            thru_2 = None
-
-
-
-
-        if fixture_a_values:
-            za = np.mean([
-                value["z"]
-                for value in fixture_a_values
-            ])
-
-            delay_a = np.mean([
-                value["delay"]
-                for value in fixture_a_values
-            ])
-
-        elif thru_1:
-            za = thru_1["z1"]
-            delay_a = thru_1["delay1"]
-
-        else:
-            za = None
-            delay_a = None
-
-        if fixture_b_values:
-            zb = np.mean([
-                value["z"]
-                for value in fixture_b_values
-            ])
-
-            delay_b = np.mean([
-                value["delay"]
-                for value in fixture_b_values
-            ])
-
-        elif thru_2:
-            zb = thru_2["z2"]
-            delay_b = thru_2["delay2"]
-
-        elif thru_1:
-            zb = thru_1["z2"]
-            delay_b = thru_1["delay2"]
-
-        else:
-            zb = None
-            delay_b = None
-
-        za_text = (
-            f"{za:.2f} Ohms"
-            if za is not None
-            else "-- Ohms"
-        )
-
-        zb_text = (
-            f"{zb:.2f} Ohms"
-            if zb is not None
-            else "-- Ohms"
-        )
-
-        delay_a_text = (
-            f"{delay_a:.2f} ps"
-            if delay_a is not None
-            else "-- ps"
-        )
-
-        delay_b_text = (
-            f"{delay_b:.2f} ps"
-            if delay_b is not None
-            else "-- ps"
-        )
-
-        # self.impedance_result.set(
-        #     f"Fixture A ZA: {za_text}       "
-        #     f"Fixture B ZB: {zb_text}"
-        # )
-
-        # self.length_result.set(
-        #     f"Fixture A delay: {delay_a_text}       "
-        #     f"Fixture B delay: {delay_b_text}"
-        # )
-        # self.impedance_result.set(
-        #     f"ZA = {za:.2f} Ohm    |    ZB = {zb:.2f} Ohm"
-        # )
-
-        za_value = "--" if za is None else f"{za:.2f}"
-        zb_value = "--" if zb is None else f"{zb:.2f}"
-
-        # self.impedance_result.set(
-        #     f"ZA = {za_value} Ohm | ZB = {zb_value} Ohm"
-        # )
-
-        print("delay_a =", delay_a)
-        print("delay_b =", delay_b)
-        print("type delay_a =", type(delay_a))
-        print("type delay_b =", type(delay_b))
-
-        if delay_a is None:
-            delay_a_text = "--"
-        else:
-            delay_a_text = f"{delay_a:.2f}"
-
-        if delay_b is None:
-            delay_b_text = "--"
-        else:
-            delay_b_text = f"{delay_b:.2f}"
-
-        # self.length_result.set(
-        #     f"TTD_A = {delay_a_text} ps | TTD_B = {delay_b_text} ps"
-        # )
-        print("LABEL UPDATE FINISHED")
 
     def _build_page4(self):
         ttk.Label(self.page4,text="Select ports and channels to be corrected",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))
@@ -5024,14 +3029,6 @@ class AFRWizardComplete(tk.Tk):
         d=filedialog.askdirectory()
         if d: var.set(d)
 
-    def run_batch(self):
-        from pathlib import Path
-        d=Path(self.batch_in.get())
-        if not d.is_dir(): messagebox.showwarning("Invalid folder","Choose a valid input directory."); return
-        files=sorted(d.glob(self.batch_pattern.get())); self.batch_log.config(state="normal"); self.batch_log.delete("1.0","end")
-        self.batch_log.insert("end",f"Found {len(files)} file(s).\n"+"\n".join(x.name for x in files)+"\n\nRF processing backend not connected.\n"); self.batch_log.config(state="disabled")
-
- 
     def request_page(self, target_page):
         """Control navigation through the page tabs."""
         try:
@@ -5188,4 +3185,5 @@ class AFRWizardComplete(tk.Tk):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     AFRWizardComplete().mainloop()

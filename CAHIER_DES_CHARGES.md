@@ -1,6 +1,6 @@
 # Cahier des charges — Refonte de l'outil AFR (Automatic Fixture Removal)
 
-Version 0.1 — proposition à valider avant le démarrage des travaux.
+Version 0.2 — décisions validées le 10/09/2026, travaux démarrés (lots 0 à 2 livrés).
 
 ## 1. Contexte
 
@@ -32,7 +32,7 @@ Constats utiles pour dimensionner la refonte :
 ## 3. Objectifs demandés
 
 1. **SHORT S1P → S2P** : traitement explicite du SHORT (fait en partie : signe Γ = −1). À compléter par la combinaison OPEN + SHORT quand les deux existent (§ 4.2).
-2. **« TDD » de chaque ligne** : voir la question ouverte § 6.1. Deux lectures possibles, les deux sont proposées.
+2. **« TDD » de chaque ligne** : délai de propagation (TTD) et longueur physique déduite via ε_r effectif (décision § 6).
 3. **Code propre et modulaire** : séparation calcul / interface / fichiers, tests automatiques, journalisation.
 4. **Améliorations** : méthodes de calcul plus robustes, validations, multiport.
 
@@ -55,21 +55,19 @@ Limites : S22 n'est pas mesurable avec un seul standard ; la réponse en bord de
 
 ### 4.2 OPEN + SHORT combinés (recommandé quand les deux sont mesurés)
 
-Avec les deux mesures, l'hypothèse S22 = S11 disparaît :
+Relations exactes entre les deux mesures :
 
     Γ_o − Γ_s = 2 · S21² / (1 − S22²)
     Γ_o + Γ_s = 2 · S11 + 2 · S21² · S22 / (1 − S22²)
 
-Algorithme :
+Algorithme retenu (implémenté dans `afr/reflect.py`, `fixture_from_open_short`) :
 
-1. `M = (Γ_o + Γ_s)/2`, `D = (Γ_o − Γ_s)/2`.
-2. S11 = partie proche (t ≈ 0) de `M`, obtenue par fenêtrage temporel.
-3. S22 = (M − S11) / D (partie lointaine, lissée).
-4. S21² = D · (1 − S22²), puis racine carrée continue (branche DC).
-5. Contrôle : reconstruire Γ_o et Γ_s avec le modèle et afficher le résidu en dB.
+1. `M = (Γ_o + Γ_s)/2` : les réflexions lointaines (+S21²… et −S21²…) s'annulent, la partie proche de `M` donne S11 sans fuite du bout de ligne.
+2. `D = (Γ_o − Γ_s)/2` : la réflexion proche s'annule, la partie lointaine de `D` donne S21²/(1 − S11²) proprement.
+3. S21 = racine carrée continue de `D_far · (1 − S11²)`, branche fixée à DC.
+4. Contrôle de cohérence : S21 obtenu avec l'OPEN seul et avec le SHORT seul doivent coïncider (écart moyen en dB et en degrés, affiché dans le journal).
 
-Résultat : fixture complet (S11, S21, S22) sans hypothèse de symétrie, et une mesure de cohérence OPEN/SHORT.
-Un standard LOAD optionnel (si disponible) permettrait un « OSL » complet et supprimerait tout fenêtrage.
+**Limite physique importante** : un OPEN ou un SHORT placé directement au bout du fixture ne « voit » pas la transition fixture → 50 Ω côté DUT. Au premier ordre, la partie lointaine de `M` est nulle quel que soit le fixture : S22 n'est donc pas identifiable avec ces deux standards seuls. Le fixture reste supposé symétrique (S22 = S11). Pour lever cette hypothèse il faut soit le 2x-thru (déjà utilisé), soit un standard LOAD (OSL complet, sans fenêtrage).
 
 ### 4.3 2x-thru (fixture A + B)
 
@@ -99,9 +97,9 @@ Sortie : délai en ps, longueur électrique, longueur physique si ε_r effectif 
 - Profil TDR : Z(t) = Z0 · (1 + ρ(t)) / (1 − ρ(t)) à partir de la réponse en échelon (intégrale de la réponse impulsionnelle fenêtrée). Affichage de Z le long du fixture et valeur au milieu de la ligne.
 - Valeur scalaire = médiane de Z(t) sur la zone [0,2τ · 0,8τ] plutôt qu'une moyenne fréquentielle.
 
-### 4.7 Mode mixte (si « TDD » = paramètres différentiels Tdd)
+### 4.7 Mode mixte — hors périmètre (décision § 6)
 
-Pour un fixture 4 ports (paire différentielle) : conversion single-ended → mixed-mode avec `Network.se2gmm`, extraction de Sdd11, Sdd21 (souvent notés Tdd11, Tdd21), Scc et Sdc. Délai et impédance différentiels (Zdiff) dérivés de Sdd. Voir question § 6.1.
+Conservé pour mémoire. Pour un fixture 4 ports (paire différentielle) : conversion single-ended → mixed-mode avec `Network.se2gmm`, extraction de Sdd11, Sdd21 (souvent notés Tdd11, Tdd21), Scc et Sdc. Délai et impédance différentiels (Zdiff) dérivés de Sdd.
 
 ### 4.8 Contrôles qualité (communs)
 
@@ -138,24 +136,26 @@ Règles :
 - Toute méthode de calcul est une fonction pure (entrées → sorties), les paramètres (fenêtres, bandes) sont des arguments avec valeurs par défaut.
 - Les résultats sont horodatés et exportés dans un dossier par session (`Results/<date>/`), avec un fichier récapitulatif (JSON) des délais, impédances et avertissements.
 
-## 6. Questions à valider avant démarrage
+## 6. Décisions validées
 
-1. **Signification de « TDD »** : (a) délai de propagation de chaque ligne/port (TTD, ps) — déjà partiellement affiché ; ou (b) paramètres différentiels Tdd11/Tdd21 pour paires différentielles (4 ports). Proposition : livrer (a) dans le lot 2, (b) dans le lot 4. Merci de confirmer.
-2. **Interface** : conserver Tkinter (pas de dépendance supplémentaire) ou passer à une autre bibliothèque ? Proposition : conserver Tkinter, seule la structure change.
-3. **Pages 4 et 6** (pilotage VNA, batch) : hors périmètre pour l'instant, ou implémenter le batch « fichiers » (dossier de mesures DUT → dossier de résultats) ? Proposition : batch fichiers dans le lot 4, VNA hors périmètre.
-4. **Multiport** : nombre de ports cible (4 ? 8 ?) et priorité par rapport au 2 ports.
-5. **Compatibilité** : versions Python et scikit-rf utilisées sur le poste de mesure (l'IEEE P370 demande scikit-rf ≥ 0.29).
-6. **Données réelles** : peut-on disposer d'un jeu de mesures (2x-thru, open, short, DUT) pour la validation, en plus des fixtures synthétiques ?
+| Point | Décision |
+|---|---|
+| « TDD » | Délai de propagation de la ligne (TTD, ps). Un champ « Effective εr » (page 3) et un label « Length » par ligne donnent la longueur physique `c · TTD / √εr_eff`. Le mode mixte (Tdd21) est retiré du périmètre. |
+| Interface | Tkinter conservé : aucune dépendance nouvelle sur le poste de mesure, et le noyau `afr/` est indépendant de l'interface (un passage à Qt resterait possible sans toucher aux calculs). |
+| Batch (page 6) | Batch « fichiers » : dossier d'entrée de mesures DUT (motif `*.s2p`), dossier de sortie, application des fixtures A/B calculées en page 3 et cochées en page 4, un fichier `<nom>_DEEMBEDDED.s2p` par mesure, journal des succès/échecs. Le pilotage direct du VNA (page 4, SCPI) reste hors périmètre. |
+| Multiport | Nombre de ports dynamique, limité à 32 (déjà borné dans l'interface). L'extraction reste 2 ports par paire dans un premier temps ; le multiport complet est planifié en lot 4. |
+| Compatibilité | Versions minimales fixées dans `requirements.txt` : Python ≥ 3.9, numpy ≥ 1.24, scipy ≥ 1.10, scikit-rf ≥ 0.29 (nécessaire pour l'IEEE P370 en lot 4). À vérifier sur le poste de mesure avec `python --version` et `pip show scikit-rf`. |
+| Validation | Sur données réelles par le client après livraison de l'extraction ; fixtures synthétiques et tests automatiques côté développement. |
 
 ## 7. Plan de travail par lots
 
 | Lot | Contenu | Dépend de |
 |---|---|---|
-| 0 | Filet de sécurité : fixtures synthétiques, tests de non-régression sur le code actuel, `requirements.txt`, `logging` | — |
-| 1 | Extraction du noyau `afr/` sans changer les résultats (fonctions pures, suppression des doublons et du code mort) | 0 |
-| 2 | OPEN + SHORT combinés (§4.2), délai de ligne (§4.5), impédance TDR (§4.6), affichage des contrôles qualité | 1 |
+| 0 | Filet de sécurité : fixtures synthétiques, tests automatiques, `requirements.txt`, `logging` — **livré** | — |
+| 1 | Extraction du noyau `afr/` (fonctions pures, suppression des doublons et du code mort ; le fichier interface passe de 5 190 à 3 190 lignes) — **livré** | 0 |
+| 2 | OPEN + SHORT combinés (§4.2), délai de ligne et longueur (§4.5), impédance TDR (§4.6), batch fichiers (page 6) — **livré**, contrôles qualité affichés dans le journal (interface en lot 3) | 1 |
 | 3 | Découpage de l'interface en `gui/` (pages, widgets, fenêtre de tracé), remplacement des `print` | 1 |
-| 4 | Améliorations : IEEE P370, de-embedding scikit-rf et multiport, mode mixte (§4.7), batch fichiers | 2, 3 |
+| 4 | Améliorations : IEEE P370, multiport (≤ 32 ports), profil TDR tracé | 2, 3 |
 | 5 | Documentation utilisateur, README, exemple de bout en bout | 4 |
 
 Chaque lot est livré sur la branche avec ses tests ; les lots 2 et 3 peuvent être menés en parallèle.
@@ -166,4 +166,4 @@ Chaque lot est livré sur la branche avec ses tests ; les lots 2 et 3 peuvent ê
 - Sur un DUT synthétique connu : de-embedding retrouve le DUT à < 0,1 dB / 2° sur la bande utile.
 - Aucun `print` dans le flux nominal ; les avertissements sont visibles dans l'interface.
 - `python -m pytest` passe sans interface graphique.
-- Les résultats de l'ancien script sont reproduits par le lot 1 à la précision numérique près (non-régression).
+- Les résultats de l'ancien script ne sont pas reproduits à l'identique (fenêtrage du 2x-thru et impédance corrigés) ; la référence est le fixture synthétique et la validation sur données réelles.
