@@ -19,7 +19,6 @@ from gui.plot_window import PlotWindow
 
 log = logging.getLogger("afr.gui")
 
-
 EPS = 1e-12
 APP_BG = "#e6e6e6"
 PANEL_BG = "#e6e6e6"
@@ -50,8 +49,6 @@ class AFRConfiguration:
     use_short_b: bool = False
     thru_length_mode: str = "known"
     known_thru_length_ns: float = 0.0
-
-
 
 
 class FixtureDiagram(tk.Canvas):
@@ -328,9 +325,6 @@ class AFRWizardComplete(tk.Tk):
         self.port_impedance_labels = {}
         self.port_delay_labels = {}
 
-
-
-
         self.fixture_a_network = None
         self.fixture_b_network = None
         self.deembedded_network = None
@@ -349,24 +343,12 @@ class AFRWizardComplete(tk.Tk):
         self.half_thru_file_out = None
         self.converted_networks = {}
 
-
-        # self.rf_output_dir = str(Path.cwd() / "Results")
-        # self.rf_output_dir = str(Path.cwd() / "Results")
-
         self.rf_output_dir = tk.StringVar(value=str(Path.cwd()/ "Results"))
-
-
-        # Path(self.rf_output_dir).mkdir(
-        #     parents=True,
-        #     exist_ok=True
-        # )
 
         Path(self.rf_output_dir.get()).mkdir(
             parents=True,
             exist_ok=True
         )
-
-
 
         self.export_format = tk.StringVar(value="db")
 
@@ -385,7 +367,6 @@ class AFRWizardComplete(tk.Tk):
         self.plot_converted = tk.BooleanVar(value=False)
         self.plot_half_in = tk.BooleanVar(value=False)
         self.plot_half_out = tk.BooleanVar(value=False)
-        
 
         # Format d'affichage du graphique
         self.plot_format = tk.StringVar(value="db_phase")
@@ -432,15 +413,12 @@ class AFRWizardComplete(tk.Tk):
         self._footer()
         self.show_page(0)
 
-
     def save_network(
             self,
             network,
             default_name="RESULT"
         ):
-
         try:
-
             output_file = filedialog.asksaveasfilename(
                 title="Save Touchstone File",
                 defaultextension=".s2p",
@@ -458,10 +436,6 @@ class AFRWizardComplete(tk.Tk):
                 output_file
             )[0]
 
-            print(
-                f"Sauvegarde : {base_name}"
-            )
-
             network.write_touchstone(
                 base_name
             )
@@ -472,7 +446,6 @@ class AFRWizardComplete(tk.Tk):
             )
 
         except Exception as e:
-
             import traceback
 
             traceback.print_exc()
@@ -593,7 +566,6 @@ class AFRWizardComplete(tk.Tk):
         self.next_btn.pack(side="right", padx=5)
         self.back_btn = ttk.Button(foot, text="Back", command=self.previous_page)
         self.back_btn.pack(side="right", padx=5)
-
 
     # ======================================================================
     # Pont vers le noyau de calcul (paquet afr/)
@@ -816,7 +788,6 @@ class AFRWizardComplete(tk.Tk):
         form = self.export_format.get()
 
         for key in reflection_keys:
-
             result = self.build_afr_s2p_from_s1p(self.standard_files[key], reflect_type=key)
 
             self.fixture_results[key] = result
@@ -838,7 +809,6 @@ class AFRWizardComplete(tk.Tk):
         sides = sorted({key.split("_", 1)[1] for key in reflection_keys})
 
         for side in sides:
-
             open_key, short_key = f"OPEN_{side}", f"SHORT_{side}"
 
             if open_key not in self.standard_files or short_key not in self.standard_files:
@@ -883,9 +853,7 @@ class AFRWizardComplete(tk.Tk):
         """Lignes 'Fixture A / B' : Z, TTD et longueur issus des reflexions."""
 
         for side in ("A", "B"):
-
             for key in (f"REFLECT_{side}", f"OPEN_{side}", f"SHORT_{side}"):
-
                 info = self.extracted_info.get(key)
 
                 if info and "z" in info:
@@ -1064,9 +1032,6 @@ class AFRWizardComplete(tk.Tk):
         self.diag_reflect_a.draw_reflect("A")
 
         self.reflect_b_frame = ttk.Frame(self.standard_area)
-        # ttk.Checkbutton(self.reflect_b_frame, text="Open", variable=self.open_b).grid(row=0, column=0, sticky="w")
-        # ttk.Checkbutton(self.reflect_b_frame, text="Short", variable=self.short_b).grid(row=1, column=0, sticky="w")
-
 
         self.open_b_check = ttk.Checkbutton(self.reflect_b_frame,text="Open",variable=self.open_b,command=self.on_reflect_changed)
         self.open_b_check.grid(row=0,column=0,sticky="w")
@@ -1096,15 +1061,11 @@ class AFRWizardComplete(tk.Tk):
         ttk.Label(self.page2, textvariable=self.rule_summary, foreground="#364f6b",
                   font=("Segoe UI", 10, "bold"), wraplength=1050).pack(anchor="w", pady=5)
 
-
-
     def on_second_2x_thru_changed(self):
         """
         Désélectionne Open et Short lorsque le deuxième
         standard 2X Thru est sélectionné.
         """
-        print("plot_thru =", self.plot_thru.get())
-        print("standard_files =", self.standard_files)
 
         if self.use_second_2x.get():
             self.open_a.set(False)
@@ -1114,7 +1075,6 @@ class AFRWizardComplete(tk.Tk):
 
         self._store_page2()
         self.update_standard_summary()
-
 
     def on_reflect_changed(self):
         """
@@ -1129,27 +1089,14 @@ class AFRWizardComplete(tk.Tk):
             self.short_b.get(),
         ])
 
-        # if reflect_selected:
-            # self.use_2x_thru.set(False)
-            # self.use_second_2x.set(False)
-        if reflect_selected:
-            print("Reflect standard selected")
-
         self._store_page2()
         self.update_standard_summary()
-
 
     def on_2x_thru_changed(self):
         """
         Lorsqu'un 2X Thru est sélectionné,
         les standards Open et Short sont désélectionnés.
         """
-        print("SEARCHING THRU_LINE1")
-        print(self.standard_files.get("THRU_LINE1"))
-
-        print("SEARCHING THRU_LINE2")
-        print(self.standard_files.get("THRU_LINE2"))
-
 
         if self.use_2x_thru.get():
             self.open_a.set(False)
@@ -1159,7 +1106,6 @@ class AFRWizardComplete(tk.Tk):
 
         self._store_page2()
         self.update_standard_summary()
-
 
     def update_standard_summary(self):
         """Mise à jour du texte affiché sous les standards."""
@@ -1201,9 +1147,6 @@ class AFRWizardComplete(tk.Tk):
                 "Open/Short reflection standards."
             )
 
-
-        
-
     def page1_changed(self):
         multi = self.measurement_mode.get() == "multiport"
         self.multiport_spin.configure(state="normal" if multi else "disabled")
@@ -1239,17 +1182,12 @@ class AFRWizardComplete(tk.Tk):
         c.characterization_fixture_different = self.char_fixture_different.get()
 
     def safe_grid_forget(self, widget):
-
         try:
-
             if widget is not None:
-
                 if widget.winfo_exists():
-
                     widget.grid_forget()
 
         except Exception:
-
             pass
 
     def synchronize_page2_from_page1(self):
@@ -1259,9 +1197,7 @@ class AFRWizardComplete(tk.Tk):
             return
 
         if not self.chk_2x.winfo_exists():
-            print("CHK_2X destroyed")
             return
-
 
         if self.measurement_mode.get() == "multiport":
             self.build_multiport_standards()
@@ -1273,28 +1209,7 @@ class AFRWizardComplete(tk.Tk):
         special_asymmetric_case = different and unequal_match
 
         # Clear dynamic widgets before placing the correct configuration.
-        # for widget in [self.chk_second, self.diag_second, self.chk_dut, self.diag_dut,
-        #                self.reflect_a_frame, self.reflect_b_frame]:
-        #     widget.grid_forget()
 
-        # for widget in [
-        #     self.chk_second,
-        #     self.diag_second,
-        #     self.chk_dut,
-        #     self.diag_dut,
-        #     self.reflect_a_frame,
-        #     self.reflect_b_frame
-        # ]:
-
-        #     try:
-
-        #         if widget.winfo_exists():
-
-        #             widget.grid_forget()
-
-        #     except Exception:
-
-        #         pass
         for widget in [
             self.chk_second,
             self.diag_second,
@@ -1303,16 +1218,9 @@ class AFRWizardComplete(tk.Tk):
             self.reflect_a_frame,
             self.reflect_b_frame
         ]:
-
             self.safe_grid_forget(widget)
 
-
         # 2X Thru remains required in all supplied cases.
-        # self.use_2x_thru.set(True)
-        # self.chk_2x.configure(state="disabled")
-        print("CHK_2X =", self.chk_2x)
-        print("EXIST =", self.chk_2x.winfo_exists())
-        # self.chk_2x.configure(state="normal")
 
         if (
             hasattr(self, "chk_2x")
@@ -1320,18 +1228,14 @@ class AFRWizardComplete(tk.Tk):
         ):
             self.chk_2x.configure(state="normal")
 
-        # if different:
         if special_asymmetric_case:
             # Two independent symmetric characterization boards.
             self.diag_2x.draw_thru_aa()
-            # self.use_second_2x.set(True)
-            # self.chk_second.configure(state="disabled")
             self.chk_second.configure(state="normal")
             self.chk_second.grid(row=1, column=0, sticky="w", pady=5)
             self.diag_second.draw_thru_bb()
             self.diag_second.grid(row=1, column=1, sticky="w")
 
-         
             self.chk_dut.configure(state="normal")
             self.chk_dut.grid(row=2, column=0, sticky="w", pady=5)
             self.diag_dut.grid(row=2, column=1, sticky="w")
@@ -1369,19 +1273,9 @@ class AFRWizardComplete(tk.Tk):
 
         self._store_page2()
 
-
-
     def build_multiport_standards(self):
-
-        # for widget in self.standard_area.winfo_children():
-        #     widget.destroy()
-        # for widget in self.standard_area.winfo_children():
-
-        #     if getattr(widget, "_dynamic_widget", False):
-        #         widget.destroy()
         for widget in self.standard_area.winfo_children():
             widget.grid_forget()
-
 
         n = self.multiport_count.get()
 
@@ -1390,7 +1284,6 @@ class AFRWizardComplete(tk.Tk):
         row = 0
 
         for port in range(1, n + 1):
-
             open_var = tk.BooleanVar()
             short_var = tk.BooleanVar()
 
@@ -1428,13 +1321,11 @@ class AFRWizardComplete(tk.Tk):
 
             row += 1
 
-
         # -------------------------
         # THRU seulement après
         # -------------------------
 
         for p1 in range(1, n, 2):
-
             p2 = p1 + 1
 
             var = tk.BooleanVar(value=True)
@@ -1480,10 +1371,8 @@ class AFRWizardComplete(tk.Tk):
         except (tk.TclError, ValueError):
             c.known_thru_length_ns = 0.0
 
-
     def validate_page2(self):
         """Validate the calibration standards selected on Page 2."""
-        print("validate_page2 called")
 
         mode = self.thru_mode.get()
 
@@ -1506,8 +1395,6 @@ class AFRWizardComplete(tk.Tk):
                 "one Open/Short reflection standard."
             )
             return False
-
-
 
         if mode == "known":
             if thru_selected:
@@ -1579,30 +1466,18 @@ class AFRWizardComplete(tk.Tk):
         self._store_page2()
         return True
 
-    # def _selected_standard_rows(self):
-    #     rows = []
-    #     defs = [("2x_thru", "2X Thru", self.use_2x_thru),
-    #             ("second_2x_thru", "Second 2X Thru", self.use_second_2x),
-    #             ("fixtured_dut", "Fixtured DUT", self.use_fixtured_dut),
-    #             ("open_a", "Open Fixture A", self.open_a), ("short_a", "Short Fixture A", self.short_a),
-    #             ("open_b", "Open Fixture B", self.open_b), ("short_b", "Short Fixture B", self.short_b)]
-        # return [(key, label) for key, label, var in defs if var.get()]
-
     def is_multiport(self):
         return (
             self.measurement_mode.get() == "multiport"
         )
-   
-    def _selected_standard_rows(self):
 
+    def _selected_standard_rows(self):
         rows = []
 
         if self.is_multiport():
-
             n = self.multiport_count.get()
 
             for port in range(1, n + 1):
-
                 if getattr(
                     self,
                     f"open_p{port}",
@@ -1611,7 +1486,6 @@ class AFRWizardComplete(tk.Tk):
                     self,
                     f"open_p{port}"
                 ).get():
-
                     rows.append(
                         (
                             f"OPEN_P{port}",
@@ -1627,7 +1501,6 @@ class AFRWizardComplete(tk.Tk):
                     self,
                     f"short_p{port}"
                 ).get():
-
                     rows.append(
                         (
                             f"SHORT_P{port}",
@@ -1640,7 +1513,6 @@ class AFRWizardComplete(tk.Tk):
                 "multiport_thrus",
                 []
             ):
-
                 key,var,label = thru
 
                 if var.get():
@@ -1669,9 +1541,6 @@ class AFRWizardComplete(tk.Tk):
             if var.get()
         ]
 
-
-
-
     def _build_page3(self):
         ttk.Label(self.page3, text="Measure or Load Calibration Standards", style="PageTitle.TLabel").pack(anchor="w", pady=(0,10))
         self.files_box = ttk.LabelFrame(self.page3, text="Calibration standard files", style="Section.TLabelframe", padding=12)
@@ -1680,20 +1549,13 @@ class AFRWizardComplete(tk.Tk):
         self._refresh_page3_rows()
         calc = ttk.LabelFrame(self.page3, text="Calculated Fixture Characteristics", style="Section.TLabelframe", padding=12)
         calc.pack(fill="x", pady=12)
-        # self.impedance_result = tk.StringVar(value="Fixture A ZA: -- Ohms       Fixture B ZB: -- Ohms")
-        # self.length_result = tk.StringVar(value="Fixture A: -- ns + Fixture B: -- ns = -- ns")
         self.result_frame = ttk.Frame(calc)
         self.result_frame.pack(fill="x")
 
-       
         self.port_result_rows = {}
         self.row_delays = {}
 
-
-
-        # ttk.Label(calc, textvariable=self.impedance_result, font=("Segoe UI",11,"bold")).pack(anchor="w", padx=18, pady=3)
         ttk.Label(calc, text="Length").pack(anchor="w")
-        # ttk.Label(calc, textvariable=self.length_result, font=("Segoe UI",11,"bold")).pack(anchor="w", padx=18, pady=3)
         td=ttk.LabelFrame(self.page3,text="Time Domain Settings",style="Section.TLabelframe",padding=12); td.pack(fill="x")
         self.step_rise=tk.DoubleVar(value=17.9880)
         self.enable_interpolation = tk.BooleanVar(value=True)
@@ -1731,19 +1593,14 @@ class AFRWizardComplete(tk.Tk):
             ]
         ).grid(row=1,column=1,padx=5)
 
-
         interp_frame = ttk.Frame(td)
         interp_frame.pack(anchor="w", pady=5)
-        # ttk.Checkbutton(interp_frame,text="Enable Frequency Interpolation",variable=self.enable_interpolation).pack(side="left")
         ttk.Label(interp_frame,text="Method:").pack(side="left", padx=(20,5))
         ttk.Combobox(interp_frame,textvariable=self.interpolation_method,values=["Linear","PCHIP","Cubic Spline","Akima"],state="readonly",width=16).pack(side="left")
         ttk.Checkbutton(td,text="Enable Frequency Interpolation",variable=self.enable_interpolation).pack(anchor="w", pady=5)
         ttk.Button(td,text="Calculate Fixture Characteristics",command=self.calculate_characteristics).pack(anchor="w",pady=8)
-        # plot_button_frame = ttk.Frame(td),plot_button_frame.pack(fill="x",pady=(5, 0))
         plot_button_frame = ttk.Frame(td)
         plot_button_frame.pack(fill="x",pady=(5, 0))
-
-
 
         ttk.Button(
             plot_button_frame,
@@ -1828,12 +1685,7 @@ class AFRWizardComplete(tk.Tk):
             ttk.Button(self.files_box,text="Measure",command=lambda k=key:self.measure_standard(k)).grid(row=i,column=3,padx=3)
         self.files_box.columnconfigure(1,weight=1)
 
-    # def load_standard(self,key):
-    #     from tkinter import filedialog
-    #     f=filedialog.askopenfilename(filetypes=[("Touchstone","*.s1p *.s2p *.s4p"),("All files","*.*")])
-    #     if f: self.standard_file_vars[key].set(f); self.status.set(f"Loaded: {f}")
     def expected_port_count(self, key):
-
         if key.startswith("OPEN_"):
                 return 1
 
@@ -1844,14 +1696,12 @@ class AFRWizardComplete(tk.Tk):
             return 2
 
         if key == "ASYM_DUT":
-
             if self.is_multiport():
                 return self.multiport_count.get()
 
             return 2
 
         return None
-
 
     def check_frequency_grid(self, frequency):
         frequency = np.asarray(
@@ -1879,7 +1729,6 @@ class AFRWizardComplete(tk.Tk):
                 "Frequency values must be strictly increasing."
             )
 
-
     def check_finite_complex(self, values, name):
         values = np.asarray(values)
 
@@ -1892,7 +1741,6 @@ class AFRWizardComplete(tk.Tk):
             raise ValueError(
                 f"{name} contains invalid imaginary values."
             )
-
 
     def load_standard(self, key):
         filename = filedialog.askopenfilename(
@@ -1942,23 +1790,9 @@ class AFRWizardComplete(tk.Tk):
     def measure_standard(self,key):
         messagebox.showinfo("VNA measurement",f"Connect the VNA acquisition command for: {key}")
 
-  
     def calculate_characteristics(self):
+        log.info("Standards charges : %s", ", ".join(self.standard_files))
 
-
-        print("================================")
-        print("STANDARD FILES")
-        print("================================")
-
-        for k,v in self.standard_files.items():
-            print(k,"=>",v)
-
-        print("================================")
-        print("CONFIG")
-        print("================================")
-
-        print("use_2x_thru =", self.config_data.use_2x_thru)
-        print("use_second_2x_thru =", self.config_data.use_second_2x_thru)
         try:
             self._store_page2()
 
@@ -1978,94 +1812,32 @@ class AFRWizardComplete(tk.Tk):
                 )
                 return
 
-            print("================================")
-            print("STANDARD FILES")
-            print("================================")
-            print(self.standard_files)
-
-            print("================================")
-            print("SELECTED ROWS")
-            print("================================")
-            print(self._selected_standard_rows())
-
-
             for key in self.standard_files:
-
                 if key.startswith("THRU_"):
-
                     self.calculate_thru_fixture(key)
-
 
             self._measured_cache = {}
             self.calculate_reflection_fixtures()
             self.update_fixture_result_labels()
-            print("STEP 1 OK")
 
             self.extraction_done = True
-            print("STEP 2 OK")
 
             self.status.set(
                 "Fixture characteristics calculated successfully."
             )
-            print("STEP 3 OK")
-            print()
-            print("====================")
-            print("CONVERTED OPEN FILES")
-            print("====================")
 
-            print(
-                getattr(
-                    self,
-                    "converted_open_files",
-                    {}
-                )
-            )
-
-            print(self.converted_open_files)
-
-            print()
-            print("====================")
-            print("CONVERTED NETWORKS")
-            print("====================")
-
-            print(self.converted_networks.keys())
-
-            print()
-            print("=====================")
-            print("HALF NETWORKS CHECK")
-            print("=====================")
             self.fixture_pairs.keys()
             self.half_networks.keys()
-            
-
-            print(self.half_networks.keys())
-
-            print()
-            print("=====================")
-            print("FIXTURE PAIRS CHECK")
-            print("=====================")
-
-            print(self.fixture_pairs.keys())
-
-            print("================================")
-            print("SELECTED STANDARDS")
-            print("================================")
-            print("use_2x_thru =", self.config_data.use_2x_thru)
-            print("use_second_2x_thru =", self.config_data.use_second_2x_thru)
 
         except Exception as error:
             messagebox.showerror(
                 "AFR calculation error",
                 str(error)
             )
-            print("PORT RESULT ROWS =")
-            print(self.port_result_rows)
 
             raise
 
-
     def calculate_thru_fixture(self, key):
-        
         if key not in self.standard_files:
             raise FileNotFoundError(
                 f"{key} has not been loaded."
@@ -2081,10 +1853,6 @@ class AFRWizardComplete(tk.Tk):
         )
         self.fixture_a_network = fixture_in
         self.fixture_b_network = fixture_out
-
-        print("FIXTURE A =", self.fixture_a_network)
-        print("FIXTURE B =", self.fixture_b_network)
-
 
         if not hasattr(self, "fixture_pairs"):
             self.fixture_pairs = {}
@@ -2103,39 +1871,28 @@ class AFRWizardComplete(tk.Tk):
         self.half_networks[f"{key}_IN"] = fixture_in
         self.half_networks[f"{key}_OUT"] = fixture_out
 
-
         ports = self.plot_port_names.get(key)
 
         if ports is None:
-
             parts = key.split("_")
 
             if len(parts) == 3:
-
                 p1 = int(parts[1])
                 p2 = int(parts[2])
 
                 ports = (p1, p2)
 
             else:
-
                 ports = (1, 2)
 
         p1, p2 = ports
 
-        # else:
-        #             return
-        print("DISPLAY PORTS =", p1, p2)
         self.create_port_result_row(p1)
         self.create_port_result_row(p2)
-
-        
-                
 
         self.set_result_row(p1, information["z1"], information["delay1"], key)
         self.set_result_row(p2, information["z2"], information["delay2"], key)
         self.extracted_info[key] = dict(information)
-                
 
     def _build_page4(self):
         ttk.Label(self.page4,text="Select ports and channels to be corrected",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))
@@ -2167,7 +1924,6 @@ class AFRWizardComplete(tk.Tk):
         messagebox.showinfo("Correction",f"Channels selected: {selected}\nConnect this command to the VNA/de-embedding backend.")
 
     def _build_page5(self):
-        from pathlib import Path
         ttk.Label(self.page5,text="Save Fixture",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))
         f=ttk.LabelFrame(self.page5,text="File format",style="Section.TLabelframe",padding=12); f.pack(fill="x")
         self.save_format=tk.StringVar(value="touchstone")
@@ -2177,7 +1933,6 @@ class AFRWizardComplete(tk.Tk):
         self.port_format=tk.StringVar(value="vna")
         for text,val in [("PLTS Format","plts"),("VNA Format","vna"),("ADS Format","ads")]: ttk.Radiobutton(p,text=text,value=val,variable=self.port_format).pack(anchor="w")
         o=ttk.LabelFrame(self.page5,text="Output",style="Section.TLabelframe",padding=12); o.pack(fill="x")
-        # self.output_dir=tk.StringVar(value=self.rf_output_dir); 
         self.base_name=tk.StringVar(value="HALF")
         ttk.Label(o,text="Directory:").grid(row=0,column=0,sticky="w"); ttk.Entry(o,textvariable=self.rf_output_dir).grid(row=0,column=1,sticky="ew",padx=5)
         ttk.Button(o,text="Browse...",command=self.choose_output).grid(row=0,column=2)
@@ -2185,18 +1940,8 @@ class AFRWizardComplete(tk.Tk):
         ttk.Button(o,text="Save Fixture Files",command=self.save_fixtures).grid(row=2,column=1,pady=10); o.columnconfigure(1,weight=1)
 
     def choose_output(self):
-        from tkinter import filedialog
         d=filedialog.askdirectory()
         if d: self.rf_output_dir.set(d)
-
-    # def save_fixtures(self):
-    #     from pathlib import Path
-    #     d=Path(self.rf_output_dir.get()); d.mkdir(parents=True,exist_ok=True); base=self.base_name.get().strip()
-    #     if not base: messagebox.showwarning("Missing name","Enter a base file name."); return
-    #     ext={"touchstone":".s2p","touchstone2":".ts","citifile":".cti"}[self.save_format.get()]
-    #     for n in (1,2): (d/f"{base}{n}{ext}").write_text("! AFR placeholder - RF backend not connected\n",encoding="utf-8")
-    #     messagebox.showinfo("Saved",f"Prototype fixture files saved in {d}")
-
 
     def save_fixtures(self):
         output_directory = Path(
@@ -2279,28 +2024,11 @@ class AFRWizardComplete(tk.Tk):
         self.batch_log=tk.Text(self.page6,height=18,state="disabled"); self.batch_log.pack(fill="both",expand=True,pady=10)
 
     def choose_batch_dir(self,var):
-        from tkinter import filedialog
         d=filedialog.askdirectory()
         if d: var.set(d)
 
     def request_page(self, target_page):
         """Control navigation through the page tabs."""
-        try:
-            print("REQUEST PAGE =", target_page)
-        except Exception as e:
-            print(e)
-
-        print("REQUEST PAGE =", target_page)
-
-        if hasattr(self, "chk_2x"):
-            try:
-                print("CHK_2X EXISTS =", self.chk_2x.winfo_exists())
-            except:
-                print("CHK_2X ERROR")
-
-        
-        
-
         if target_page == self.current_page:
             return
 
@@ -2330,16 +2058,13 @@ class AFRWizardComplete(tk.Tk):
                     "Calibration Reference Z0 must be numeric."
                 )
                 return
-            print("BEFORE SYNC")
 
             self.synchronize_page2_from_page1()
-            print("AFTER SYNC")
 
         # A direct jump from Page 1 to Page 3, 4, 5 or 6
         # must also validate Page 2.
 
         if target_page >= 2:
-
             self.synchronize_page2_from_page1()
 
             if not self.validate_page2():
@@ -2349,46 +2074,11 @@ class AFRWizardComplete(tk.Tk):
             self.show_page(target_page)
             return
 
-        # cas page 0 -> page 1
         self.show_page(target_page)
-
-
-        # if target_page >= 2:
-        #     print("BEFORE SYNC")
-        #     self.synchronize_page2_from_page1()
-        #     print("AFTER SYNC")
-
-        #     if not self.validate_page2():
-        #         self.show_page(1)
-        #         return
-        #     print("BEFORE SYNC")
-
-        #     self.show_page(target_page)
-        #     print("AFTER SYNC")
 
     def show_page(self, page_index):
         if page_index < 0 or page_index > 5:
             return
-
-        # if page_index == 1:
-        #     try:
-        #         if self.z0_mode.get() == "fixed":
-        #             if self.z0_value.get() <= 0:
-        #                 messagebox.showwarning(
-        #                     "Invalid Z0",
-        #                     "Calibration Reference Z0 must be positive."
-        #                 )
-        #                 return
-        #     except tk.TclError:
-        #         messagebox.showwarning(
-        #             "Invalid Z0",
-        #             "Calibration Reference Z0 must be a numeric value."
-        #         )
-        #         return
-        #     print("BEFORE SYNC")
-
-        #     self.synchronize_page2_from_page1()
-            # print("AFTER SYNC")
 
         if page_index == 2:
             if not self.validate_page2():
