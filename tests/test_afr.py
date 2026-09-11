@@ -64,6 +64,48 @@ def test_dc_grid_starts_at_zero_and_keeps_band():
     assert np.imag(xu[0]) == 0.0
 
 
+def test_extend_spectrum_continues_line_response(line):
+    from afr.signal import extend_spectrum
+
+    fu, xu = dc_uniform_grid(FREQ, line.s[:, 1, 0])
+    f_ext, x_ext = extend_spectrum(fu, xu, fraction=0.25)
+    n = len(fu)
+    assert len(f_ext) > n
+    assert np.allclose(f_ext[:n], fu) and np.allclose(x_ext[:n], xu)
+    # module borne et phase qui continue de tourner au meme rythme
+    assert np.all(np.abs(x_ext[n:]) <= np.max(np.abs(xu)) + 1e-12)
+    step = np.diff(np.unwrap(np.angle(x_ext)))
+    assert abs(np.mean(step[n:]) - np.mean(step[n - 50:n])) < 0.05 * abs(np.mean(step[n - 50:n]))
+
+
+def test_band_edge_is_usable_up_to_fmax():
+    """Bande large (10 MHz - 120 GHz) : l'erreur en bord de bande reste bornee."""
+
+    freq = np.arange(10e6, 120e9 + 1, 20e6)
+    line = synthetic_line(freq=freq, delay=150e-12, loss_db_10ghz=0.5)
+    result = reflect.fixture_from_reflect(freq, one_port(line, +1.0), "OPEN")
+    est, ref = result.network.s[:, 1, 0], line.s[:, 1, 0]
+
+    edge = freq >= 110e9
+    mag_err = 20 * np.log10(np.abs(est[edge])) - 20 * np.log10(np.abs(ref[edge]))
+    phase_err = np.degrees(np.angle(est[edge] * np.conj(ref[edge])))
+    assert np.max(np.abs(mag_err)) < 1.0, f"bord de bande : {np.max(np.abs(mag_err)):.2f} dB"
+    assert np.max(np.abs(phase_err)) < 8.0
+
+    mid = (freq >= 5e9) & (freq <= 100e9)
+    mag_err = 20 * np.log10(np.abs(est[mid])) - 20 * np.log10(np.abs(ref[mid]))
+    assert np.max(np.abs(mag_err)) < 0.3
+
+
+def test_coarse_frequency_step_is_flagged():
+    """Fixture trop long pour le pas de frequence : avertissement dans quality."""
+
+    freq = np.arange(100e6, 20e9 + 1, 100e6)          # span = 10 ns
+    line = synthetic_line(freq=freq, delay=2.0e-9)     # aller-retour 4 ns + fenetre > 0.4 span
+    result = reflect.fixture_from_reflect(freq, one_port(line, +1.0), "OPEN")
+    assert "warning" in result.quality
+
+
 def test_sqrt_continuous_recovers_propagation_term():
     p = np.exp(-2j * np.pi * FREQ * DELAY)
     root = complex_sqrt_continuous(p * p, FREQ)

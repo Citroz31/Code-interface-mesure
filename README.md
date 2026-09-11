@@ -38,10 +38,19 @@ afr/                 noyau de calcul (numpy / scikit-rf), sans Tkinter
   thru.py            decoupage du 2x-thru
   deembed.py         retrait des fixtures, traitement par lot
   models.py          FixtureResult, BatchItem
+gui/plot_window.py   fenetre de trace (sources, S-parametres, formats, zoom)
 matrice_et_branche.py  interface Tkinter (6 pages)
 tests/               tests pytest
 CAHIER_DES_CHARGES.md  specification de la refonte
 ```
+
+## Bord de bande
+
+Le fenetrage temporel prolonge le spectre de 25 % au-dela de f_max par
+extrapolation (module et phase) et n'attenue que cette partie prolongee :
+les resultats restent exploitables jusqu'a la derniere frequence mesuree.
+Un avertissement est journalise si le pas de frequence est trop grand pour
+la longueur du fixture (repliement temporel).
 
 ## Longueur de ligne
 

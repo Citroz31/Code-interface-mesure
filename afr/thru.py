@@ -106,9 +106,14 @@ def split_2x_thru(thru: rf.Network, interp_method: str = "Linear",
     quality = {
         "delay_total_ps": t_total * 1e12,
         "near_gate_ps": t_gate * 1e12,
+        "time_span_ps": td21.span * 1e12,
+        "time_resolution_ps": td21.tres * 1e12,
         "sqrt_residual": float(np.max(np.abs(s21_half * s21_half - rad))),
         "reconstruction_s21": reconstruction,
     }
+    warning = sig.check_time_span(td21, t_total + t_gate)
+    if warning:
+        quality["warning"] = warning
     quality.update(metrics.quality_report(half_in.s))
 
     info = {

@@ -9,16 +9,13 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 
 import numpy as np
 import skrf as rf
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
-
 from afr import deembed as afr_deembed
 from afr import io as afr_io
 from afr import metrics as afr_metrics
 from afr import reflect as afr_reflect
 from afr import signal as afr_signal
 from afr import thru as afr_thru
+from gui.plot_window import PlotWindow
 
 log = logging.getLogger("afr.gui")
 
@@ -1754,813 +1751,69 @@ class AFRWizardComplete(tk.Tk):
             command=self.open_plot_window
         ).pack(side="left")
 
+    # ======================================================================
+    # Fenetre de trace (gui/plot_window.py)
+    # ======================================================================
+
     def open_plot_window(self):
-        """
-        Ouvre une nouvelle fenêtre contenant :
-        - la sélection des fichiers à afficher ;
-        - la sélection des paramètres S ;
-        - le format amplitude/phase ;
-        - le graphique Matplotlib.
-        """
+        """Ouvre (ou ramene au premier plan) la fenetre de trace."""
 
         if self.plot_window is not None:
             try:
                 if self.plot_window.winfo_exists():
+                    self.plot_window.refresh_sources()
                     self.plot_window.lift()
                     self.plot_window.focus_force()
                     return
             except tk.TclError:
-                self.plot_window = None
-
-        self.plot_window = tk.Toplevel(self)
-        self.plot_window.title("AFR S-Parameter Plot")
-        self.plot_window.geometry("1350x850")
-        self.plot_window.minsize(1000, 700)
-        self.plot_window.configure(background=APP_BG)
-
-        self.plot_window.protocol(
-                "WM_DELETE_WINDOW",
-                self.close_plot_window
-            )
-
-        controls = ttk.Frame(
-                self.plot_window,
-                padding=10
-            )
-
-        controls.pack(
-                side="left",
-                fill="y"
-            )
-
-        graph_frame = ttk.Frame(
-                self.plot_window,
-                padding=5
-            )
-
-        graph_frame.pack(
-                side="right",
-                fill="both"
-                ,expand=True
-            )
-
-        # ============================================================
-        # Sources à tracer
-        # ============================================================
-
-        source_frame = ttk.LabelFrame(controls,text="Plot Sources",style="Section.TLabelframe",padding=10)
-        source_frame.pack(fill="x",pady=(0, 10))
-
-        self.plot_sources = {}
-        # =========================
-        # THRU (2xThru originaux)
-        # =========================
-
-        for key in sorted(
-            getattr(
-                self,
-                "fixture_pairs",
-                {}
-            ).keys()
-        ):
-
-            var = tk.BooleanVar(value=False)
-
-            self.plot_sources[key] = var
-
-            ttk.Checkbutton(
-                source_frame,
-                text=key,
-                variable=var
-            ).pack(anchor="w")
-
-
-        # =========================
-        # HALF (résultats extraits)
-        # =========================
-
-        for key in sorted(
-            getattr(
-                self,
-                "half_networks",
-                {}
-            ).keys()
-        ):
-
-            var = tk.BooleanVar(value=False)
-
-            self.plot_sources[key] = var
-
-            ttk.Checkbutton(
-                source_frame,
-                text=key,
-                variable=var
-            ).pack(anchor="w")
-
-
-        print("HALF NETWORKS")
-        print("HALF NETWORKS AVAILABLE")
-        
-        print(self.half_networks.keys())
-        print("HALF NETWORKS =", self.half_networks)
-        print("FIXTURE PAIRS =", self.fixture_pairs)
-
-
-        print("FIXTURE PAIRS")
-        print(self.fixture_pairs.keys())
-        # ============================================================
-        # Paramètres S
-        # ============================================================
-
-        parameter_frame = ttk.LabelFrame(
-            controls,
-            text="S-Parameters",
-            style="Section.TLabelframe",
-            padding=10
-        )
-        parameter_frame.pack(
-            fill="x",
-            pady=(0, 10)
-        )
-
-        ttk.Checkbutton(
-            parameter_frame,
-            text="S11",
-            variable=self.plot_s11
-        ).pack(anchor="w", pady=2)
-
-        ttk.Checkbutton(
-            parameter_frame,
-            text="S12",
-            variable=self.plot_s12
-        ).pack(anchor="w", pady=2)
-
-        ttk.Checkbutton(
-            parameter_frame,
-            text="S21",
-            variable=self.plot_s21
-        ).pack(anchor="w", pady=2)
-
-        ttk.Checkbutton(
-            parameter_frame,
-            text="S22",
-            variable=self.plot_s22
-        ).pack(anchor="w", pady=2)
-
-        # ============================================================
-        # Format amplitude et phase
-        # ============================================================
-
-        format_frame = ttk.LabelFrame(
-            controls,
-            text="Plot Format",
-            style="Section.TLabelframe",
-            padding=10
-        )
-        format_frame.pack(
-            fill="x",
-            pady=(0, 10)
-        )
-
-        ttk.Radiobutton(
-            format_frame,
-            text="Amplitude dB + Phase degrees",
-            value="db_phase",
-            variable=self.plot_format
-        ).pack(anchor="w", pady=2)
-
-        ttk.Radiobutton(
-            format_frame,
-            text="Magnitude + Phase radians",
-            value="mag_phase",
-            variable=self.plot_format
-        ).pack(anchor="w", pady=2)
-
-        ttk.Radiobutton(
-            format_frame,
-            text="Real + Imaginary",
-            value="real_imag",
-            variable=self.plot_format
-        ).pack(anchor="w", pady=2)
-
-        # ============================================================
-        # Boutons
-        # ============================================================
-
-        ttk.Button(
-            controls,
-            text="Update Plot",
-            command=self.update_plot_window
-        ).pack(
-            fill="x",
-            pady=(5, 3)
-        )
-
-        ttk.Button(
-            controls,
-            text="Select All S-Parameters",
-            command=self.select_all_sparameters
-        ).pack(
-            fill="x",
-            pady=3
-        )
-
-        ttk.Button(
-            controls,
-            text="Clear Plot Selection",
-            command=self.clear_plot_selection
-        ).pack(
-            fill="x",
-            pady=3
-        )
-
-        ttk.Button(
-            controls,
-            text="Close",
-            command=self.close_plot_window
-        ).pack(
-            fill="x",
-            pady=(15, 3)
-        )
-
-        # ============================================================
-        # Figure Matplotlib intégrée dans Tkinter
-        # ============================================================
-
-        self.plot_figure = Figure(
-            figsize=(12, 7),
-            dpi=100
-        )
-
-        self.plot_canvas = FigureCanvasTkAgg(
-            self.plot_figure,
-            master=graph_frame
-        )
-
-        self.plot_canvas.get_tk_widget().pack(
-            fill="both",
-            expand=True
-        )
-
-        self.update_plot_window()
-
-    def close_plot_window(self):
-        """Ferme et réinitialise la fenêtre de graphique."""
-
-        if self.plot_window is not None:
-            try:
-                self.plot_window.destroy()
-            except tk.TclError:
                 pass
+            self.plot_window = None
 
+        self.plot_window = PlotWindow(
+            self,
+            self.available_plot_networks,
+            on_close=self._plot_window_closed,
+            background=APP_BG,
+        )
+
+    def _plot_window_closed(self):
         self.plot_window = None
-        self.plot_canvas = None
 
-    def select_all_sparameters(self):
-        """Sélectionne tous les paramètres S."""
-
-        self.plot_s11.set(True)
-        self.plot_s12.set(True)
-        self.plot_s21.set(True)
-        self.plot_s22.set(True)
-        self.update_plot_window()
-    def clear_plot_selection(self):
-
-        for var in self.plot_sources.values():
-            var.set(False)
-
-        self.update_plot_window()
-
-
-    def get_selected_plot_networks(self):
+    def available_plot_networks(self):
         """
-        Retourne la liste des réseaux sélectionnés.
-
-        Chaque élément retourné est :
-            (nom_affiché, réseau_skrf)
+        Reseaux tracables : standards mesures (fichiers charges) puis
+        fixtures extraits (demi-thru, OPEN / SHORT convertis, OPEN+SHORT).
         """
-        print()
-        print("======================")
-        print("PLOT SOURCES")
-        print("======================")
 
-        for name, var in self.plot_sources.items():
+        items = []
+        cache = getattr(self, "_measured_cache", None)
+        if cache is None:
+            cache = self._measured_cache = {}
 
-            print(
-                name,
-                "=",
-                var.get()
-            )
-        print("======================")
-        print("PLOT STATUS")
-        print("======================")
-        print("plot_open =", self.plot_open.get())
+        for key, path in self.standard_files.items():
+            try:
+                network = cache.get(path)
+                if network is None:
+                    network = cache[path] = afr_io.load_network(path)
+                items.append((f"{key} (measured)", network))
+            except Exception as error:
+                log.warning("Fichier %s illisible : %s", path, error)
 
-        print("THRU =", self.plot_thru.get())
-        print("HALF A =", self.plot_half_a.get())
-        print("HALF B =", self.plot_half_b.get())
-        print("plot_thru =", self.plot_thru.get())
-        print("standard_files =", self.standard_files)
-        print("plot_half_a =", self.plot_half_a.get())
-        print("plot_half_b =", self.plot_half_b.get())
-
-        print("fixture_a_network =", self.fixture_a_network)
-        print("fixture_b_network =", self.fixture_b_network)
-        # print("OPEN KEY =", key, converted)
-        for key, converted in self.converted_open_files.items():
-
-            print(
-                "OPEN KEY =",
-                key,
-                converted
-            )
-
-        networks = []
-            # ============================================================
-            # 2X Thru mesuré
-            # ============================================================
-        for key, var in self.plot_sources.items():
-
-            if not var.get():
+        for key, network in self.half_networks.items():
+            if network is None:
                 continue
-            if key.startswith("THRU_"):
-
-                filename = self.standard_files.get(key)
-
-                if filename:
-                    
-                    print("ADDING THRU", key)
-                    networks.append(
-                        (
-                            key,
-                            rf.Network(filename)
-                        )
-                    )
-            # elif key.startswith("HALF_"):
-            elif (
-                    key.endswith("_IN")
-                    or
-                    key.endswith("_OUT")
-                ):
-
-                net = self.half_networks.get(key)
-
-                if net is not None:
-
-                    networks.append(
-                        (
-                            key,
-                            net
-                        )
-                    )
-                
-    
-                    plot_ports = getattr(
-                        self,
-                        "plot_port_names",
-                        {}
-                    )
-
-                    p1, p2 = plot_ports.get(
-                        "THRU_LINE1",
-                        (1,2)
-                    )
-
-                label_a = f"Half Fixture A (THRU {p1}-{p2})"
-                label_b = f"Half Fixture B (THRU {p1}-{p2})"
-
-           
-        # ============================================================
-        # Open mesuré et converti
-        # ============================================================
-        # self.plot_open = tk.BooleanVar(value=False)
-
-        if self.plot_open.get():
-
-            for key in ("OPEN_A","OPEN_B"):
-
-        # for key in ("OPEN_A","OPEN_B"):
-            
-
-                net = self.converted_networks.get(key)
-
-                converted = self.converted_open_files.get(key)
-
-                if net is not None:
-
-                    networks.append(
-                        (
-                            key,
-                            net
-                        )
-                    )
-                    converted = self.converted_open_files.get(key)
-
-                elif (
-                    isinstance(converted, str)
-                    and
-                    Path(converted).is_file()
-                ):
-
-                    networks.append(
-                        (
-                            key,
-                            rf.Network(converted)
-                        )
-                    )
-
-            # ============================================================
-            # Short mesuré et converti
-            # ============================================================
-
-            # converted = self.converted_short_files.get(key)
-            converted = None
-            if self.plot_short.get():
-                for key, label in (
-                    ("SHORT_A", "Short Fixture A measured"),
-                    ("SHORT_B", "Short Fixture B measured"),
-                ):
-                    converted = self.converted_short_files.get(key)
-                    filename = self.standard_files.get(key)
-
-                    if filename:
-                        try:
-                            networks.append(
-                                (
-                                    label,
-                                    rf.Network(filename)
-                                )
-                            )
-                        except Exception as error:
-                            print(
-                                f"Unable to load {key}: {error}"
-                            )
-
-                    # converted = self.converted_files.get(key)
-                    net = self.converted_networks.get(key)
-
-                    if net is not None:
-
-                        networks.append(
-                            (
-                                key,
-                                net
-                            )
-                        )
-
-                    if isinstance(converted, rf.Network):
-                        networks.append(
-                            (
-                                label.replace(
-                                    "measured",
-                                    "converted"
-                                ),
-                                converted
-                            )
-                        )
-                        converted = self.converted_open_files.get(key)
-
-                    elif isinstance(converted, str):
-                        if Path(converted).is_file():
-                            networks.append(
-                                (
-                                    label.replace(
-                                        "measured",
-                                        "converted"
-                                    ),
-                                    rf.Network(converted)
-                                )
-                                )
-                            print("================================")
-                            print("NETWORKS AVAILABLE FOR PLOT")
-                            print("================================")
-
-                            for name, net in networks:
-                                print(name, net.nports, net.frequency.npoints)
-
-                                print("================================")
-                                print("NETWORKS SENT TO PLOT")
-                                print("================================")
-
-                                for name, net in networks:
-                                    print(name)
-        # --------------------------------------------------
-        # Remove duplicates
-        # --------------------------------------------------
-
-        unique = {}
-
-        for name, net in networks:
-            unique[name] = net
-
-        networks = list(unique.items())
-
-        print("FINAL NETWORKS")
-
-        for name, _ in networks:
-            print(name)
-
-        return networks
-
-            #         # --------------------------------------------------
-            #         # Remove duplicates
-            #         # --------------------------------------------------
-            # unique = {}
-
-            # for name, net in networks:
-            #     unique[name] = net
-
-            # networks = list(unique.items())
-
-            # print("FINAL NETWORKS")
-
-            # for name, _ in networks:
-            #     print(name)
-
-            #     print("================================")
-            #     print("NETWORKS SENT TO PLOT")
-            #     print("================================")
-
-            #     for name, net in networks:
-            #         print(name)
-
-            #     print("FINAL NETWORK CONTENT")
-
-            #     for name, net in networks:
-            #         print(" -> ", name)
-            #         print("RETURNING NETWORKS")
-            # print(networks)
-
-            # return networks
-
-            # return networks
-
-
-    def get_selected_sparameters(self):
-        """Retourne les paramètres S sélectionnés."""
-        
-        parameters = []
-
-        if not self.get_selected_plot_networks():
-            return parameters
-
-        # network = self.get_selected_plot_networks()[0][1]
-
-        # print("NETWORK USED FOR PARAMETER LIST")
-        # print(network)
-        # print("NPORTS =", network.nports)
-
-        # for i in range(network.nports):
-
-        #     for j in range(network.nports):
-
-        #         parameters.append(
-        #             (
-        #                 f"S{i+1}{j+1}",
-        #                 i,
-        #                 j
-        #             )
-        #         )
-        max_ports = 1
-
-        for _, net in self.get_selected_plot_networks():
-
-            max_ports = max(
-                max_ports,
-                net.nports
-            )
-
-        parameters = []
-
-        for name, var in self.sparam_vars.items():
-
-            if var.get():
-
-                i = int(name[1]) - 1
-                j = int(name[2]) - 1
-
-                parameters.append(
-                    (
-                        name,
-                        i,
-                        j
-                    )
-                )
-
-        return parameters
-
-    
-
-
-    def update_plot_window(self):
-        
-        """Met à jour le graphique selon les sélections."""
-
-        print("================================")
-        print("UPDATE PLOT")
-        print("================================")
-
-        nets = self.get_selected_plot_networks()
-
-        if nets is None:
-            print("ERROR : get_selected_plot_networks returned None")
-            return
-
-        # nets = self.collect_networks()
-
-        print("NETS TYPE =", type(nets))
-        print("NETS VALUE =", nets)
-
-        print("NETWORKS =", len(nets))
-
-        for name, net in nets:
-            print(name, net.nports)
-
-        if not hasattr(self, "plot_figure"):
-            return
-
-        self.plot_figure.clear()
-
-        networks = self.get_selected_plot_networks()
-        print("NB NETWORKS =", len(networks))
-
-        parameters = self.get_selected_sparameters()
-
-        if not networks:
-            axis = self.plot_figure.add_subplot(111)
-
-            axis.text(
-                0.5,
-                0.5,
-                "No plot source is currently available.\n"
-                "Load and calculate the selected standards first.",
-                horizontalalignment="center",
-                verticalalignment="center",
-                transform=axis.transAxes
-            )
-
-            axis.set_axis_off()
-
-            if self.plot_canvas is not None:
-                self.plot_canvas.draw_idle()
-
-            return
-
-        if not parameters:
-            axis = self.plot_figure.add_subplot(111)
-
-            axis.text(
-                0.5,
-                0.5,
-                "Select at least one S-parameter.",
-                horizontalalignment="center",
-                verticalalignment="center",
-                transform=axis.transAxes
-            )
-
-            axis.set_axis_off()
-
-            if self.plot_canvas is not None:
-                self.plot_canvas.draw_idle()
-
-            return
-
-        plot_format = self.plot_format.get()
-        column_count = len(parameters)
-
-        axes_top = []
-        axes_bottom = []
-
-        for column_index in range(column_count):
-            top_axis = self.plot_figure.add_subplot(
-                2,
-                column_count,
-                column_index + 1
-            )
-
-            bottom_axis = self.plot_figure.add_subplot(
-                2,
-                column_count,
-                column_count + column_index + 1
-            )
-
-            axes_top.append(top_axis)
-            axes_bottom.append(bottom_axis)
-
-        for label, network in networks:
-            frequency_ghz = (
-                network.frequency.f / 1e9
-            )
-
-            for column_index, (
-                parameter_name,
-                row_index,
-                port_index
-            ) in enumerate(parameters):
-
-                if (
-                    row_index >= network.nports
-                    or port_index >= network.nports
-                ):
-                    continue
-
-                s_parameter = network.s[
-                    :,
-                    row_index,
-                    port_index
-                ]
-
-                magnitude = np.abs(s_parameter)
-
-                if plot_format == "db_phase":
-                    top_values = 20.0 * np.log10(
-                        np.maximum(
-                            magnitude,
-                            1e-15
-                        )
-                    )
-
-                    unwrapped_phase = np.unwrap(
-                        np.angle(s_parameter)
-                    )
-
-                    bottom_values = np.rad2deg(
-                        unwrapped_phase
-                    )
-
-                    top_ylabel = "Amplitude (dB)"
-                    bottom_ylabel = "Phase (degrees)"
-
-                elif plot_format == "mag_phase":
-                    top_values = magnitude
-
-                    bottom_values = np.unwrap(
-                        np.angle(s_parameter)
-                    )
-
-                    top_ylabel = "Magnitude"
-                    bottom_ylabel = "Phase (radians)"
-
-                else:
-                    top_values = np.real(
-                        s_parameter
-                    )
-
-                    bottom_values = np.imag(
-                        s_parameter
-                    )
-
-                    top_ylabel = "Real"
-                    bottom_ylabel = "Imaginary"
-
-                axes_top[column_index].plot(
-                    frequency_ghz,
-                    top_values,
-                    label=label
-                )
-
-                axes_bottom[column_index].plot(
-                    frequency_ghz,
-                    bottom_values,
-                    label=label
-                )
-
-                axes_top[column_index].set_title(
-                    parameter_name
-                )
-
-                axes_top[column_index].set_ylabel(
-                    top_ylabel
-                )
-
-                axes_bottom[column_index].set_ylabel(
-                    bottom_ylabel
-                )
-
-                axes_bottom[column_index].set_xlabel(
-                    "Frequency (GHz)"
-                )
-
-        for axis in axes_top + axes_bottom:
-            axis.grid(True)
-
-            handles, labels = (
-                axis.get_legend_handles_labels()
-            )
-
-            if handles:
-                axis.legend(
-                    fontsize=8
-                )
-
-        self.plot_figure.tight_layout()
-
-        if self.plot_canvas is not None:
-            self.plot_canvas.draw_idle()
-
-
-            
-
+            if key.endswith("_IN"):
+                label = f"{key[:-3]} fixture A (half IN)"
+            elif key.endswith("_OUT"):
+                label = f"{key[:-4]} fixture B (half OUT)"
+            elif key.endswith("_HALF"):
+                base = key[:-5]
+                label = f"{base} (fixture)" if not base.startswith("REFLECT_") else f"OPEN+SHORT {base[8:]} (fixture)"
+            else:
+                label = key
+            items.append((label, network))
+
+        return items
 
     def _refresh_page3_rows(self):
         if not hasattr(self, "files_box"): return
@@ -2743,6 +1996,7 @@ class AFRWizardComplete(tk.Tk):
                     self.calculate_thru_fixture(key)
 
 
+            self._measured_cache = {}
             self.calculate_reflection_fixtures()
             self.update_fixture_result_labels()
             print("STEP 1 OK")

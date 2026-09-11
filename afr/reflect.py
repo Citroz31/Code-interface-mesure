@@ -67,9 +67,18 @@ def _gates(td: sig.TimeDomain, t_far: float):
     t_split = max(2 * td.tres, 0.5 * (t_far - gate_half))
     g_far = sig.gate_around(td, t_far, gate_half)
     g_near = sig.gate_near(td, t_split)
-    return g_near, g_far, dict(gate_center_ps=t_far * 1e12,
-                               gate_half_ps=gate_half * 1e12,
-                               near_split_ps=t_split * 1e12)
+
+    quality = dict(gate_center_ps=t_far * 1e12,
+                   gate_half_ps=gate_half * 1e12,
+                   near_split_ps=t_split * 1e12,
+                   time_span_ps=td.span * 1e12,
+                   time_resolution_ps=td.tres * 1e12)
+
+    warning = sig.check_time_span(td, t_far + gate_half)
+    if warning:
+        quality["warning"] = warning
+
+    return g_near, g_far, quality
 
 
 def _finish(f, fu, S11u, S21u, gamma_for_tdr, z0, method, quality, interp_method):

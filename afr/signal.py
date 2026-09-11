@@ -224,28 +224,86 @@ def resample(f, fu, y) -> np.ndarray:
 class TimeDomain:
     """Reponse impulsionnelle d'un parametre S sur grille uniforme depuis DC."""
 
-    f: np.ndarray        # grille de frequence (0 .. f_max)
+    f: np.ndarray        # grille de frequence reelle (0 .. f_max)
+    f_ext: np.ndarray    # grille etendue utilisee pour la transformee
     t: np.ndarray        # axe temporel 0 .. span
     t_sym: np.ndarray    # axe centre : t > span/2 devient t - span (temps negatifs)
     h: np.ndarray        # reponse impulsionnelle reelle
-    window: np.ndarray   # fenetre (demi Kaiser) appliquee avant irfft
+    window: np.ndarray   # fenetre appliquee avant irfft (= 1 sur la bande reelle)
     nfft: int
+    n_real: int          # nombre de points de la bande reelle
     tres: float          # resolution temporelle ~ 1 / bande
     span: float          # 1 / df : duree sans repliement
     dt: float
 
 
-def to_time_domain(fu, X, beta: float = 4.5, oversample: int = 8) -> TimeDomain:
-    """Reponse impulsionnelle de ``X(fu)`` (grille uniforme depuis DC)."""
+def extend_spectrum(fu, X, fraction: float = 0.25, fit_fraction: float = 0.15):
+    """
+    Prolonge ``X(fu)`` au-dela de f_max sur ``fraction`` de la bande.
+
+    Le module (en dB) et la phase deroulee sont extrapoles lineairement a
+    partir de leur tendance sur les derniers ``fit_fraction`` de la bande
+    (une ligne : module decroissant, phase lineaire). Le module extrapole
+    est borne par le module mesure en fin de bande.
+
+    Retourne ``(f_ext, X_ext)`` ; ``fraction <= 0`` retourne les entrees.
+    """
 
     fu = np.asarray(fu, dtype=float)
     X = np.asarray(X, dtype=complex)
     n = len(fu)
 
-    window = np.kaiser(2 * n - 1, beta)[n - 1:]
+    n_ext = int(round(fraction * (n - 1)))
+    if n_ext < 2 or n < 8:
+        return fu, X
+
+    df = fu[1] - fu[0]
+    n_fit = int(min(n, max(4, round(fit_fraction * n))))
+
+    f_fit = fu[-n_fit:]
+    phase = np.unwrap(np.angle(X))[-n_fit:]
+    mag_db = 20.0 * np.log10(np.maximum(np.abs(X[-n_fit:]), 1e-12))
+
+    slope_p, icpt_p = np.polyfit(f_fit, phase, 1)
+    slope_m, icpt_m = np.polyfit(f_fit, mag_db, 1)
+
+    f_new = fu[-1] + df * np.arange(1, n_ext + 1)
+    mag_new = 10.0 ** ((icpt_m + slope_m * f_new) / 20.0)
+    mag_new = np.minimum(mag_new, np.max(np.abs(X[-n_fit:])))
+    phase_new = icpt_p + slope_p * f_new
+
+    X_new = mag_new * np.exp(1j * phase_new)
+    return np.concatenate([fu, f_new]), np.concatenate([X, X_new])
+
+
+def to_time_domain(fu, X, extend: float = 0.25, oversample: int = 8,
+                   fit_fraction: float = 0.15) -> TimeDomain:
+    """
+    Reponse impulsionnelle de ``X(fu)`` (grille uniforme depuis DC).
+
+    Pour eviter la perte d'information en bord de bande (fenetre tendant
+    vers 0 puis division par la fenetre), le spectre est prolonge de
+    ``extend`` (25 % par defaut) par extrapolation, et seule la partie
+    prolongee est attenuee par un flanc en cosinus. La bande reelle est
+    transformee sans ponderation : aucune compensation n'est necessaire
+    au retour en frequence.
+    """
+
+    fu = np.asarray(fu, dtype=float)
+    X = np.asarray(X, dtype=complex)
+    n_real = len(fu)
+
+    f_ext, X_ext = extend_spectrum(fu, X, extend, fit_fraction)
+    n = len(f_ext)
+
+    window = np.ones(n)
+    if n > n_real:
+        k = np.arange(1, n - n_real + 1)
+        window[n_real:] = 0.5 * (1.0 + np.cos(np.pi * k / (n - n_real)))
+
     nfft = int(oversample * 2 ** int(np.ceil(np.log2(max(2 * (n - 1), 2)))))
 
-    h = np.fft.irfft(X * window, n=nfft)
+    h = np.fft.irfft(X_ext * window, n=nfft)
 
     df = fu[1] - fu[0]
     dt = 1.0 / (nfft * df)
@@ -254,9 +312,31 @@ def to_time_domain(fu, X, beta: float = 4.5, oversample: int = 8) -> TimeDomain:
     t_sym = np.where(t > span / 2, t - span, t)
 
     return TimeDomain(
-        f=fu, t=t, t_sym=t_sym, h=h, window=window, nfft=nfft,
-        tres=1.0 / fu[-1], span=span, dt=dt,
+        f=fu, f_ext=f_ext, t=t, t_sym=t_sym, h=h, window=window, nfft=nfft,
+        n_real=n_real, tres=1.0 / fu[-1], span=span, dt=dt,
     )
+
+
+def check_time_span(td: TimeDomain, t_event: float, fraction: float = 0.4):
+    """
+    Avertissement si un evenement temporel ``t_event`` (s) est trop proche
+    de la limite de repliement span/2 : le pas de frequence est alors trop
+    grand pour la longueur du fixture. Retourne None ou un message.
+    """
+
+    limit = fraction * td.span
+    if t_event <= limit:
+        return None
+
+    df = td.f[1] - td.f[0]
+    df_needed = fraction / t_event
+    message = (
+        f"Evenement a {t_event * 1e12:.0f} ps pour une duree sans repliement de "
+        f"{td.span * 1e12:.0f} ps : pas de frequence trop grand ({df / 1e6:.1f} MHz), "
+        f"viser {df_needed / 1e6:.1f} MHz ou moins."
+    )
+    log.warning(message)
+    return message
 
 
 def raised_cosine_gate(t, t1: float, t2: float, edge: float) -> np.ndarray:
@@ -292,11 +372,10 @@ def gate_around(td: TimeDomain, center: float, half_width: float,
     return raised_cosine_gate(td.t, center - half_width, center + half_width, edge)
 
 
-def gate_to_freq(td: TimeDomain, gate, window_floor: float = 0.05) -> np.ndarray:
-    """Retour en frequence de ``h * gate`` avec compensation de la fenetre."""
+def gate_to_freq(td: TimeDomain, gate) -> np.ndarray:
+    """Retour en frequence de ``h * gate`` sur la bande reelle (0 .. f_max)."""
 
-    Y = np.fft.rfft(td.h * gate, n=td.nfft)[: len(td.f)]
-    return Y / np.maximum(td.window, window_floor)
+    return np.fft.rfft(td.h * gate, n=td.nfft)[: td.n_real]
 
 
 def find_peak(td: TimeDomain, t_min: float | None = None,
