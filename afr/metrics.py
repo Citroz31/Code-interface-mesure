@@ -92,12 +92,18 @@ def tdr_profile(f, gamma, z0: float = 50.0, interp_method: str = "Linear"):
     fu, xu = sig.dc_uniform_grid(f, gamma, interp_method)
     td = sig.to_time_domain(fu, xu)
 
-    keep = td.t <= td.span / 2
-    step = np.cumsum(td.h)[keep]
-    step = np.clip(step, -0.999, 0.999)
+    # La reponse en echelon integre h depuis les temps negatifs : la moitie
+    # de l'impulsion proche (t ~ 0) est repliee en fin de vecteur (t > span/2)
+    # et serait perdue en integrant depuis t = 0.
+    order = np.argsort(td.t_sym, kind="stable")
+    t_sorted = td.t_sym[order]
+    step = np.cumsum(td.h[order])
+
+    keep = t_sorted >= 0.0
+    step = np.clip(step[keep], -0.999, 0.999)
 
     z_t = z0 * (1.0 + step) / (1.0 - step)
-    return td.t[keep], z_t
+    return t_sorted[keep], z_t
 
 
 def tdr_impedance(f, gamma, delay_s: float, z0: float = 50.0,
