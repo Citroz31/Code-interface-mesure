@@ -1,6 +1,6 @@
 # Cahier des charges — Refonte de l'outil AFR (Automatic Fixture Removal)
 
-Version 0.3 — lots 0 à 3 livrés ; méthode d'extraction S1P revue (modèle exact à une discontinuité).
+Version 0.4 — lots 0 à 3 livrés ; extraction S1P exacte, mesures en bande, fixtures dissymétriques.
 
 ## 1. Contexte
 
@@ -77,6 +77,19 @@ Une mesure qui ne commence pas près de DC (extenseur millimétrique, guide d'on
 - Conserver la relation `S21_half² = S21_2x · (1 − S11_half²)` (déjà utilisée) avec la même racine carrée continue.
 - **Option de référence** : scikit-rf implémente l'IEEE P370 (`skrf.calibration.IEEEP370_SE_NZC_2xThru` et `IEEEP370_SE_ZC_2xThru`, cette dernière corrige l'impédance à partir du DUT fixturé). Proposition : l'ajouter comme méthode sélectionnable et l'utiliser comme référence pour valider notre découpage maison.
 - Fixtures A ≠ B : combiner le 2x-thru avec les réflexions (OPEN/SHORT B) pour ne plus supposer B = port-swap de A.
+
+### 4.3 bis Fixtures dissymétriques (longueurs différentes)
+
+Cascade de référence : `mesure = fixture_entrée ** DUT ** fixture_sortie`, et `2x-thru = fixture_entrée ** fixture_sortie`.
+
+Un 2x-thru dissymétrique **n'est pas séparable** à lui seul : le découpage en deux moitiés identiques suppose la symétrie. Les voies rigoureuses, par ordre de préférence, sont implémentées dans `afr/thru.py` (`complete_pair`) :
+
+1. **OPEN / SHORT des deux côtés** : chaque fixture est extrait directement, aucune hypothèse.
+2. **Deux 2x-thru** (A + A' puis B' + B) : chacun est symétrique et caractérise un côté.
+3. **OPEN / SHORT d'un côté + 2x-thru** : l'autre côté par cascade inverse, `B = A⁻¹ ** thru`, exact.
+4. **2x-thru seul** ou **un seul côté mesuré** : symétrie supposée, avertissement émis.
+
+Contrôles associés : `pair_residual` compare `A ** B` au 2x-thru mesuré (écart sur S21 en dB et en degrés) ; `check_fixtured_dut` de-embedde la mesure du DUT fixturé et vérifie sa passivité, un résultat non passif signalant des fixtures surestimés.
 
 ### 4.4 De-embedding
 

@@ -268,6 +268,110 @@ def test_split_2x_thru(line):
 
 
 # ---------------------------------------------------------------------------
+# fixtures asymetriques (deux lignes de longueurs differentes)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def asymmetric():
+    """Entree : 55 ohm / 300 ps. Sortie : 48 ohm / 120 ps. Rien de symetrique."""
+
+    fixture_in = synthetic_line(zc=55.0, delay=300e-12, loss_db_10ghz=1.0)
+    side_b = synthetic_line(zc=48.0, delay=120e-12, loss_db_10ghz=0.6)
+    fixture_out = thru.as_output_fixture(side_b)
+    return fixture_in, fixture_out, side_b, fixture_in ** fixture_out
+
+
+def test_missing_side_is_exact_from_thru(asymmetric):
+    fixture_in, fixture_out, _, two_x = asymmetric
+
+    deduced_out = thru.fixture_out_from_thru(two_x, fixture_in)
+    assert np.max(np.abs(deduced_out.s - fixture_out.s)) < 1e-9
+
+    deduced_in = thru.fixture_in_from_thru(two_x, fixture_out)
+    assert np.max(np.abs(deduced_in.s - fixture_in.s)) < 1e-9
+
+
+def test_pair_residual_is_zero_for_the_true_pair(asymmetric):
+    fixture_in, fixture_out, _, two_x = asymmetric
+    report = thru.pair_residual(two_x, fixture_in, fixture_out)
+    assert report["thru_s21_db"] < 1e-6
+    assert report["thru_s21_deg"] < 1e-6
+
+
+def test_symmetric_split_is_wrong_on_asymmetric_thru(asymmetric):
+    """Le decoupage en deux moities identiques ne convient pas ici."""
+
+    fixture_in, _, _, two_x = asymmetric
+    half_in, _, _ = thru.split_2x_thru(two_x)
+
+    band = (FREQ >= 1e9) & (FREQ <= 15e9)
+    gap = np.max(np.abs(
+        20 * np.log10(np.abs(half_in.s[band, 1, 0]))
+        - 20 * np.log10(np.abs(fixture_in.s[band, 1, 0]))
+    ))
+    assert gap > 1.0, "le cas asymetrique devrait justement etre mal traite ainsi"
+
+
+def test_complete_pair_selects_the_right_route(asymmetric):
+    fixture_in, fixture_out, side_b, two_x = asymmetric
+
+    _, _, info = thru.complete_pair(fixture_in=fixture_in, fixture_out=fixture_out)
+    assert info["method"] == "reflect_both_sides"
+
+    a, b, info = thru.complete_pair(thru=two_x, fixture_in=fixture_in)
+    assert info["method"] == "reflect_in_plus_thru"
+    assert np.max(np.abs(b.s - fixture_out.s)) < 1e-9
+    assert info["residual"]["thru_s21_db"] < 1e-6
+
+    a, b, info = thru.complete_pair(thru=two_x, fixture_out=fixture_out)
+    assert info["method"] == "reflect_out_plus_thru"
+    assert np.max(np.abs(a.s - fixture_in.s)) < 1e-9
+
+    _, _, info = thru.complete_pair(thru=two_x)
+    assert info["method"] == "thru_symmetric_split"
+    assert "warning" in info
+
+    _, _, info = thru.complete_pair(fixture_in=fixture_in)
+    assert info["method"] == "reflect_in_mirrored"
+    assert "warning" in info
+
+    with pytest.raises(ValueError):
+        thru.complete_pair()
+
+
+def test_asymmetric_extraction_from_open_and_thru(asymmetric):
+    """OPEN du seul cote entree + 2x-thru : les deux fixtures sont retrouves."""
+
+    fixture_in, fixture_out, _, two_x = asymmetric
+
+    extracted_in = reflect.fixture_from_reflect(
+        FREQ, one_port(fixture_in, +1.0), "OPEN"
+    ).network
+
+    a, b, info = thru.complete_pair(thru=two_x, fixture_in=extracted_in)
+    assert info["method"] == "reflect_in_plus_thru"
+
+    band = (FREQ >= 1e9) & (FREQ <= 15e9)
+    for estimated, reference in ((a, fixture_in), (b, fixture_out)):
+        gap = np.max(np.abs(
+            20 * np.log10(np.abs(estimated.s[band, 1, 0]))
+            - 20 * np.log10(np.abs(reference.s[band, 1, 0]))
+        ))
+        assert gap < 0.5, f"{gap:.3f} dB"
+
+
+def test_check_fixtured_dut(asymmetric):
+    fixture_in, fixture_out, _, _ = asymmetric
+    dut = synthetic_line(zc=62.0, delay=80e-12, loss_db_10ghz=0.4)
+    measured = deembed.embed_fixtures(dut, fixture_in, fixture_out)
+
+    report = thru.check_fixtured_dut(measured, fixture_in, fixture_out)
+    assert report["passive"]
+    assert report["reconstruction"] < 1e-9
+    assert np.max(np.abs(report["network"].s - dut.s)) < 1e-9
+
+
+# ---------------------------------------------------------------------------
 # deembed
 # ---------------------------------------------------------------------------
 

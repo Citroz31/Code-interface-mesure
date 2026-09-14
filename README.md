@@ -59,6 +59,52 @@ resolu algebriquement, sans aucun fenetrage : c'est la methode la plus precise.
 L'ancienne formule du premier ordre reste disponible en page 3 (bouton
 « First order ») pour comparaison.
 
+## Standards de reflexion : OPEN, SHORT, ou les deux
+
+OPEN et SHORT s'utilisent independamment. Le choix se fait en page 3 :
+
+| Mode | Comportement |
+|---|---|
+| Automatique (defaut) | combine OPEN + SHORT quand les deux fichiers d'un cote sont charges, sinon utilise celui qui est disponible |
+| OPEN only | ignore les fichiers SHORT |
+| SHORT only | ignore les fichiers OPEN |
+| OPEN + SHORT only | exige les deux, avertit si un seul est charge |
+
+Les extractions individuelles sont toujours calculees et exportees
+(`OPEN_A_CONVERTED.s2p`, `SHORT_A_CONVERTED.s2p`) ; la combinaison ajoute
+`REFLECT_A_CONVERTED.s2p`. Quand les deux existent, l'ecart entre les deux
+extractions est mesure : au-dela de 1 dB un avertissement invite a verifier
+les standards ou a n'en garder qu'un.
+
+## Lignes d'entree et de sortie de longueurs differentes
+
+La cascade utilisee est `mesure = fixture_entree ** DUT ** fixture_sortie`.
+Aucune symetrie n'est supposee : l'outil choisit la voie la plus rigoureuse
+parmi celles que les standards charges autorisent.
+
+| Standards disponibles | Voie utilisee | Hypothese |
+|---|---|---|
+| OPEN / SHORT des deux cotes | chaque cote extrait directement | aucune |
+| Deux 2x-thru (A + A', puis B' + B) | un cote par 2x-thru | chaque 2x-thru est symetrique |
+| OPEN / SHORT d'un cote + 2x-thru | l'autre cote par cascade inverse `B = A^-1 ** thru` | aucune, c'est exact |
+| 2x-thru seul | decoupage en deux moities identiques | les deux lignes sont identiques |
+| OPEN / SHORT d'un seul cote | l'autre cote est le miroir | les deux lignes sont identiques |
+
+Les deux dernieres lignes declenchent un avertissement : ce sont les seules
+qui supposent la symetrie. Pour des longueurs differentes, mesurer un OPEN ou
+un SHORT sur au moins un des deux cotes suffit a lever l'hypothese.
+
+Des que le 2x-thru est charge, la cascade des deux fixtures extraits est
+comparee a la mesure : un ecart superieur a 0,5 dB sur S21 est signale.
+
+## Mesure du DUT monte entre les deux lignes
+
+Le standard « Fixtured DUT » sert de controle. Apres extraction, le DUT est
+de-embedde et l'outil verifie qu'il reste passif et que la remise en cascade
+redonne la mesure. Un DUT de-embedde non passif signale des fixtures
+surestimes. Le resultat est disponible dans la fenetre de trace sous le nom
+`DUT_DEEMBEDDED`.
+
 ## Mesures en bande et bord de bande
 
 - Une mesure qui ne commence pas pres de DC (extenseur millimetrique, guide

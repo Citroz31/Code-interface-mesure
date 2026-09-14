@@ -376,6 +376,8 @@ class AFRWizardComplete(tk.Tk):
 
         self.enable_filter = tk.BooleanVar(value=False)
         self.warnings = []
+        self.thru_networks = {}
+        self.fixture_assembly = {}
 
         self.filter_method = tk.StringVar(value="Savitzky-Golay")
         self.filter_window = tk.IntVar(value=11)
@@ -734,6 +736,8 @@ class AFRWizardComplete(tk.Tk):
                 s[:, i, j] = self.apply_filter(s[:, i, j], freq)
         filtered.s = s
 
+        self.thru_networks[source_key] = filtered
+
         half_in, half_out, information = afr_thru.split_2x_thru(
             filtered,
             self.interpolation_name(),
@@ -777,15 +781,256 @@ class AFRWizardComplete(tk.Tk):
         dut.name = Path(dut_file).stem
         return afr_deembed.remove_fixtures(dut, fixture_in, fixture_out)
 
-    def reflect_fixture_network(self, side):
-        """Reseau du fixture 'side' (A/B) issu des reflexions, le meilleur disponible."""
+    def reflect_usage_order(self, side):
+        """
+        Cles de fixture a essayer pour un cote, selon le standard choisi
+        en page 3. OPEN et SHORT sont utilisables separement : rien n'oblige
+        a mesurer les deux.
+        """
 
-        for key in (f"REFLECT_{side}", f"OPEN_{side}", f"SHORT_{side}"):
+        usage = self.reflect_usage.get()
+
+        orders = {
+            "auto": (f"REFLECT_{side}", f"OPEN_{side}", f"SHORT_{side}"),
+            "combined": (f"REFLECT_{side}",),
+            "open": (f"OPEN_{side}",),
+            "short": (f"SHORT_{side}",),
+        }
+
+        return orders.get(usage, orders["auto"])
+
+    def reflect_fixture_network(self, side):
+        """Reseau du fixture d'un cote (A / B) issu des reflexions, ou None."""
+
+        for key in self.reflect_usage_order(side):
             result = self.fixture_results.get(key)
             if result is not None:
-                return result.network
+                return key, result.network
 
-        return None
+        return None, None
+
+    def calculate_reflection_fixtures(self):
+        """
+        OPEN et / ou SHORT -> fixture de chaque cote.
+
+        Chaque standard est exploite seul. La combinaison OPEN + SHORT n'est
+        calculee que si les deux fichiers du meme cote sont charges et que le
+        mode le permet ; elle vient alors s'ajouter, sans remplacer les
+        extractions individuelles.
+        """
+
+        reflection_keys = [
+            key for key in self.standard_files
+            if key.startswith(("OPEN_", "SHORT_"))
+        ]
+
+        output_dir = Path(self.rf_output_dir.get())
+        form = self.export_format.get()
+        usage = self.reflect_usage.get()
+
+        wanted = {
+            "auto": ("OPEN_", "SHORT_"),
+            "combined": ("OPEN_", "SHORT_"),
+            "open": ("OPEN_",),
+            "short": ("SHORT_",),
+        }.get(usage, ("OPEN_", "SHORT_"))
+
+        for key in reflection_keys:
+            if not key.startswith(wanted):
+                continue
+
+            result = self.build_afr_s2p_from_s1p(self.standard_files[key], reflect_type=key)
+
+            self.fixture_results[key] = result
+            self.converted_networks[key] = result.network
+            self.half_networks[f"{key}_HALF"] = result.network
+            self.extracted_info[key] = result.as_info()
+
+            converted_path = str(
+                afr_io.write_network(result.network, output_dir / f"{key}_CONVERTED", form)
+            )
+            self.converted_files[key] = converted_path
+
+            if key.startswith("OPEN_"):
+                self.converted_open_files[key] = converted_path
+            else:
+                self.converted_short_files[key] = converted_path
+
+        if usage not in ("auto", "combined"):
+            return
+
+        # Combinaison OPEN + SHORT, uniquement quand les deux sont disponibles
+        sides = sorted({key.split("_", 1)[1] for key in reflection_keys})
+
+        for side in sides:
+            open_key, short_key = f"OPEN_{side}", f"SHORT_{side}"
+
+            if open_key not in self.standard_files or short_key not in self.standard_files:
+                if usage == "combined":
+                    self.add_warning(
+                        f"Cote {side} : mode OPEN + SHORT demande mais un seul des deux "
+                        f"standards est charge. Choisir OPEN seul ou SHORT seul."
+                    )
+                continue
+
+            combined_key = f"REFLECT_{side}"
+
+            try:
+                result = self.build_open_short_fixture(
+                    self.standard_files[open_key],
+                    self.standard_files[short_key],
+                )
+            except Exception as error:
+                self.add_warning(f"Combinaison OPEN/SHORT {side} impossible : {error}")
+                continue
+
+            self.fixture_results[combined_key] = result
+            self.converted_networks[combined_key] = result.network
+            self.half_networks[f"{combined_key}_HALF"] = result.network
+            self.extracted_info[combined_key] = result.as_info()
+            self.converted_files[combined_key] = str(
+                afr_io.write_network(result.network, output_dir / f"{combined_key}_CONVERTED", form)
+            )
+
+            quality = result.quality
+            gap = quality.get("open_short_mag_db")
+
+            if gap is not None:
+                log.info("OPEN/SHORT %s : ecart entre les deux extractions %.2f dB / %.1f deg",
+                         side, gap, quality.get("open_short_phase_deg", float("nan")))
+                if gap > 1.0:
+                    self.add_warning(
+                        f"Cote {side} : les extractions OPEN et SHORT different de "
+                        f"{gap:.2f} dB. Verifier les standards ou n'en utiliser qu'un seul."
+                    )
+
+    # ======================================================================
+    # Assemblage des fixtures d'entree et de sortie (lignes dissymetriques)
+    # ======================================================================
+
+    def assemble_fixtures(self):
+        """
+        Construit le couple (fixture d'entree, fixture de sortie) a partir de
+        ce qui a ete mesure, sans supposer que les deux lignes ont la meme
+        longueur.
+
+        Voies possibles, de la plus rigoureuse a la plus hypothetique :
+          1. OPEN / SHORT des deux cotes ;
+          2. OPEN / SHORT d'un cote + 2x-thru : l'autre cote par cascade
+             inverse (exact) ;
+          3. 2x-thru seul : deux moities identiques (symetrie supposee).
+        """
+
+        key_a, net_a = self.reflect_fixture_network("A")
+        key_b, net_b = self.reflect_fixture_network("B")
+
+        fixture_in = net_a
+        fixture_out = afr_thru.as_output_fixture(net_b) if net_b is not None else None
+
+        thru_keys = sorted(self.thru_networks)
+        thru = self.thru_networks.get(thru_keys[0]) if thru_keys else None
+
+        # Deux 2x-thru distincts (A + A' puis B' + B) : chacun est symetrique,
+        # chacun caracterise un cote. Ce cas couvre des lignes de longueurs
+        # differentes sans aucune mesure de reflexion.
+        if len(thru_keys) >= 2:
+            first = self.fixture_pairs.get(thru_keys[0], {})
+            second = self.fixture_pairs.get(thru_keys[1], {})
+
+            if fixture_in is None and first.get("in") is not None:
+                fixture_in = first["in"]
+                log.info("Fixture d'entree pris dans %s", thru_keys[0])
+
+            if fixture_out is None and second.get("out") is not None:
+                fixture_out = second["out"]
+                log.info("Fixture de sortie pris dans %s", thru_keys[1])
+
+            # Les deux cotes sont alors connus : pas de cascade inverse a faire.
+            thru = None
+
+        if fixture_in is None and fixture_out is None and thru is None:
+            return
+
+        try:
+            fixture_in, fixture_out, info = afr_thru.complete_pair(
+                thru=thru,
+                fixture_in=fixture_in,
+                fixture_out=fixture_out,
+                interp_method=self.interpolation_name(),
+            )
+        except Exception as error:
+            self.add_warning(f"Assemblage des fixtures impossible : {error}")
+            return
+
+        self.fixture_a_network = fixture_in
+        self.fixture_b_network = fixture_out
+        self.fixture_assembly = info
+
+        both_from_thrus = len(thru_keys) >= 2 and key_a is None and key_b is None
+
+        sources = {
+            "reflect_both_sides": (
+                f"{thru_keys[0]} pour l'entree et {thru_keys[1]} pour la sortie"
+                if both_from_thrus else
+                f"OPEN/SHORT des deux cotes ({key_a}, {key_b})"
+            ),
+            "reflect_in_plus_thru": f"{key_a} + 2x-thru (sortie deduite exactement)",
+            "reflect_out_plus_thru": f"{key_b} + 2x-thru (entree deduite exactement)",
+            "thru_symmetric_split": "2x-thru seul (moities supposees identiques)",
+            "reflect_in_mirrored": f"{key_a} seul (sortie supposee identique)",
+            "reflect_out_mirrored": f"{key_b} seul (entree supposee identique)",
+        }
+
+        log.info("Fixtures assembles : %s", sources.get(info["method"], info["method"]))
+        self.status.set(f"Fixtures: {sources.get(info['method'], info['method'])}")
+
+        if info.get("warning"):
+            self.add_warning(info["warning"])
+
+        residual = info.get("residual")
+        if residual:
+            log.info("Controle A+B contre le 2x-thru : S21 %.3f dB / %.2f deg",
+                     residual["thru_s21_db"], residual["thru_s21_deg"])
+            if residual["thru_s21_db"] > 0.5:
+                self.add_warning(
+                    f"La cascade des deux fixtures s'ecarte du 2x-thru mesure de "
+                    f"{residual['thru_s21_db']:.2f} dB sur S21. Verifier les standards."
+                )
+
+        self.check_fixtured_dut_if_available()
+
+    def check_fixtured_dut_if_available(self):
+        """Controle optionnel sur la mesure du DUT monte entre les deux lignes."""
+
+        path = None
+        for key in ("ASYM_DUT", "FIXTURED_DUT", "DUT"):
+            if key in self.standard_files:
+                path = self.standard_files[key]
+                break
+
+        if path is None or self.fixture_a_network is None or self.fixture_b_network is None:
+            return
+
+        try:
+            measured = afr_io.load_network(path, expected_ports=2)
+            report = afr_thru.check_fixtured_dut(
+                measured, self.fixture_a_network, self.fixture_b_network
+            )
+        except Exception as error:
+            self.add_warning(f"Controle sur le DUT fixture impossible : {error}")
+            return
+
+        self.half_networks["DUT_DEEMBEDDED"] = report["network"]
+
+        log.info("DUT fixture de-embedde : passif %s, |S|max %.4f, reconstruction %.2e",
+                 report["passive"], report["max_singular_value"], report["reconstruction"])
+
+        if not report["passive"]:
+            self.add_warning(
+                f"Le DUT de-embedde n'est pas passif (valeur singuliere max "
+                f"{report['max_singular_value']:.3f}) : les fixtures extraits sont "
+                f"probablement surestimes."
+            )
 
     # ======================================================================
     # Lignes de resultats (Z, TTD, longueur)
@@ -842,79 +1087,6 @@ class AFRWizardComplete(tk.Tk):
 
             length_mm = afr_metrics.physical_length(delay_ps * 1e-12, eps) * 1e3
             rows[2].set(f"{self.row_name(port)} Length = {length_mm:.2f} mm (εr = {eps:g})")
-
-    def calculate_reflection_fixtures(self):
-        """OPEN / SHORT -> fixtures, puis combinaison OPEN + SHORT par cote."""
-
-        reflection_keys = [
-            key for key in self.standard_files
-            if key.startswith(("OPEN_", "SHORT_"))
-        ]
-
-        output_dir = Path(self.rf_output_dir.get())
-        form = self.export_format.get()
-
-        for key in reflection_keys:
-            result = self.build_afr_s2p_from_s1p(self.standard_files[key], reflect_type=key)
-
-            self.fixture_results[key] = result
-            self.converted_networks[key] = result.network
-            self.half_networks[f"{key}_HALF"] = result.network
-            self.extracted_info[key] = result.as_info()
-
-            converted_path = str(
-                afr_io.write_network(result.network, output_dir / f"{key}_CONVERTED", form)
-            )
-            self.converted_files[key] = converted_path
-
-            if key.startswith("OPEN_"):
-                self.converted_open_files[key] = converted_path
-            else:
-                self.converted_short_files[key] = converted_path
-
-        # OPEN + SHORT du meme fixture : extraction combinee
-        sides = sorted({key.split("_", 1)[1] for key in reflection_keys})
-
-        for side in sides:
-            open_key, short_key = f"OPEN_{side}", f"SHORT_{side}"
-
-            if open_key not in self.standard_files or short_key not in self.standard_files:
-                continue
-
-            combined_key = f"REFLECT_{side}"
-
-            try:
-                result = self.build_open_short_fixture(
-                    self.standard_files[open_key],
-                    self.standard_files[short_key],
-                )
-            except Exception as error:
-                log.warning("Combinaison OPEN/SHORT %s impossible : %s", side, error)
-                continue
-
-            self.fixture_results[combined_key] = result
-            self.converted_networks[combined_key] = result.network
-            self.half_networks[f"{combined_key}_HALF"] = result.network
-            self.extracted_info[combined_key] = result.as_info()
-            self.converted_files[combined_key] = str(
-                afr_io.write_network(result.network, output_dir / f"{combined_key}_CONVERTED", form)
-            )
-
-            quality = result.quality
-            log.info(
-                "OPEN/SHORT %s : ecart S21 open/short = %.2f dB / %.1f deg",
-                side,
-                quality.get("open_short_mag_db", float("nan")),
-                quality.get("open_short_phase_deg", float("nan")),
-            )
-
-        # Sans 2x-thru, les fixtures A / B viennent des reflexions
-        if self.fixture_a_network is None:
-            self.fixture_a_network = self.reflect_fixture_network("A")
-
-        if self.fixture_b_network is None:
-            net_b = self.reflect_fixture_network("B")
-            self.fixture_b_network = afr_thru.port_swap(net_b) if net_b is not None else None
 
     def update_fixture_result_labels(self):
         """Lignes 'Fixture A / B' : Z, TTD et longueur issus des reflexions."""
@@ -1640,6 +1812,19 @@ class AFRWizardComplete(tk.Tk):
         self.smooth_points = tk.IntVar(value=0)
         self.enforce_passivity = tk.BooleanVar(value=True)
 
+        self.reflect_usage = tk.StringVar(value="auto")
+
+        usage_frame = ttk.LabelFrame(td, text="Reflection standard to use", padding=8)
+        usage_frame.pack(fill="x", pady=(6, 0))
+        for value, text in (
+            ("auto", "Automatic: OPEN + SHORT when both are loaded, otherwise the one available"),
+            ("open", "OPEN only"),
+            ("short", "SHORT only"),
+            ("combined", "OPEN + SHORT only (requires both)"),
+        ):
+            ttk.Radiobutton(usage_frame, text=text, value=value,
+                            variable=self.reflect_usage).pack(anchor="w")
+
         model_frame = ttk.LabelFrame(td, text="Extraction model", padding=8)
         model_frame.pack(fill="x", pady=(6, 4))
         ttk.Radiobutton(
@@ -1918,6 +2103,7 @@ class AFRWizardComplete(tk.Tk):
             self._measured_cache = {}
             self.clear_warnings()
             self.calculate_reflection_fixtures()
+            self.assemble_fixtures()
             self.update_fixture_result_labels()
 
             self.extraction_done = True
@@ -1951,8 +2137,6 @@ class AFRWizardComplete(tk.Tk):
                 key
             )
         )
-        self.fixture_a_network = fixture_in
-        self.fixture_b_network = fixture_out
 
         if not hasattr(self, "fixture_pairs"):
             self.fixture_pairs = {}
