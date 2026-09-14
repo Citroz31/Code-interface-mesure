@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 
 INTERPOLATION_METHODS = ("Linear", "PCHIP", "Cubic Spline", "Akima")
 
+# Une mesure dont la premiere frequence depasse cette fraction de f_max est
+# traitee en passe-bande (pas d'extrapolation vers DC).
+LOWPASS_MAX_START = 0.05
+
 FILTER_METHODS = (
     "None",
     "Savitzky-Golay",
@@ -209,6 +213,22 @@ def dc_uniform_grid(f, x, method: str = "Linear"):
     return fu, xu
 
 
+def uniform_grid(f, x, method: str = "Linear"):
+    """
+    Reechantillonne ``x(f)`` sur une grille uniforme f[0], f[0]+df, ... ~f[-1]
+    (sans descendre a DC : mode passe-bande).
+    """
+
+    f = np.asarray(f, dtype=float)
+    x = np.asarray(x, dtype=complex)
+
+    df = float(np.median(np.diff(f)))
+    n_points = int(round((f[-1] - f[0]) / df))
+    fu = f[0] + np.arange(n_points + 1) * df
+
+    return fu, interpolate_complex(f, x, fu, method)
+
+
 def resample(f, fu, y) -> np.ndarray:
     """Retour (lineaire) d'une grille uniforme ``fu`` vers la grille ``f``."""
 
@@ -235,6 +255,42 @@ class TimeDomain:
     tres: float          # resolution temporelle ~ 1 / bande
     span: float          # 1 / df : duree sans repliement
     dt: float
+    mode: str = "lowpass"   # "lowpass" (grille depuis DC, h reel) ou "bandpass" (enveloppe complexe)
+    k0: int = 0             # indice du premier point reel dans la grille etendue
+
+
+def extend_spectrum_down(fu, X, fraction: float = 0.25, fit_fraction: float = 0.15):
+    """
+    Prolonge ``X(fu)`` en dessous de f[0] (mode passe-bande), symetrique de
+    ``extend_spectrum`` : tendance du module (dB) et de la phase sur les
+    premiers ``fit_fraction`` de la bande. Ne descend jamais sous 0 Hz.
+    Retourne ``(f_ext, X_ext)`` avec f_ext croissante, ou des tableaux vides.
+    """
+
+    fu = np.asarray(fu, dtype=float)
+    X = np.asarray(X, dtype=complex)
+    n = len(fu)
+    df = fu[1] - fu[0]
+
+    n_ext = int(round(fraction * (n - 1)))
+    n_ext = min(n_ext, int(np.floor(fu[0] / df)) - 1)
+    if n_ext < 2 or n < 8:
+        return np.zeros(0), np.zeros(0, dtype=complex)
+
+    n_fit = int(min(n, max(4, round(fit_fraction * n))))
+    f_fit = fu[:n_fit]
+    phase = np.unwrap(np.angle(X[:n_fit]))
+    mag_db = 20.0 * np.log10(np.maximum(np.abs(X[:n_fit]), 1e-12))
+
+    slope_p, icpt_p = np.polyfit(f_fit, phase, 1)
+    slope_m, icpt_m = np.polyfit(f_fit, mag_db, 1)
+
+    f_new = fu[0] - df * np.arange(n_ext, 0, -1)
+    mag_new = 10.0 ** ((icpt_m + slope_m * f_new) / 20.0)
+    mag_new = np.minimum(mag_new, np.max(np.abs(X[:n_fit])))
+    phase_new = icpt_p + slope_p * f_new
+
+    return f_new, mag_new * np.exp(1j * phase_new)
 
 
 def extend_spectrum(fu, X, fraction: float = 0.25, fit_fraction: float = 0.15):
@@ -277,35 +333,62 @@ def extend_spectrum(fu, X, fraction: float = 0.25, fit_fraction: float = 0.15):
 
 
 def to_time_domain(fu, X, extend: float = 0.25, oversample: int = 8,
-                   fit_fraction: float = 0.15) -> TimeDomain:
+                   fit_fraction: float = 0.15, mode: str = "auto") -> TimeDomain:
     """
-    Reponse impulsionnelle de ``X(fu)`` (grille uniforme depuis DC).
+    Reponse impulsionnelle de ``X(fu)`` sur grille uniforme.
 
-    Pour eviter la perte d'information en bord de bande (fenetre tendant
-    vers 0 puis division par la fenetre), le spectre est prolonge de
-    ``extend`` (25 % par defaut) par extrapolation, et seule la partie
-    prolongee est attenuee par un flanc en cosinus. La bande reelle est
-    transformee sans ponderation : aucune compensation n'est necessaire
-    au retour en frequence.
+    mode "lowpass"  : la grille part de DC (``dc_uniform_grid``), h est reel
+                      (irfft). Meilleure resolution, permet la TDR.
+    mode "bandpass" : la grille commence a f[0] > 0 (``uniform_grid``), h est
+                      l'enveloppe complexe (ifft). Aucune hypothese sur les
+                      basses frequences : indispensable pour une mesure en
+                      bande (extenseur mmW, guide d'onde).
+    mode "auto"     : lowpass si fu[0] == 0, bandpass sinon.
+
+    Dans les deux cas le spectre est prolonge par extrapolation de ``extend``
+    au-dela de f_max (et en dessous de f[0] en passe-bande), et seules les
+    parties prolongees sont attenuees par un flanc en cosinus : la bande
+    reelle est transformee sans ponderation ni compensation.
     """
 
     fu = np.asarray(fu, dtype=float)
     X = np.asarray(X, dtype=complex)
     n_real = len(fu)
+    df = fu[1] - fu[0]
 
-    f_ext, X_ext = extend_spectrum(fu, X, extend, fit_fraction)
+    if mode == "auto":
+        mode = "lowpass" if fu[0] == 0.0 else "bandpass"
+
+    f_up, X_up = extend_spectrum(fu, X, extend, fit_fraction)
+
+    if mode == "lowpass":
+        f_ext, X_ext, k0 = f_up, X_up, 0
+    else:
+        f_dn, X_dn = extend_spectrum_down(fu, X, extend, fit_fraction)
+        f_ext = np.concatenate([f_dn, f_up])
+        X_ext = np.concatenate([X_dn, X_up])
+        k0 = len(f_dn)
+
     n = len(f_ext)
+    n_up = n - k0 - n_real
 
     window = np.ones(n)
-    if n > n_real:
-        k = np.arange(1, n - n_real + 1)
-        window[n_real:] = 0.5 * (1.0 + np.cos(np.pi * k / (n - n_real)))
+    if n_up > 0:
+        k = np.arange(1, n_up + 1)
+        window[k0 + n_real:] = 0.5 * (1.0 + np.cos(np.pi * k / n_up))
+    if k0 > 0:
+        j = np.arange(1, k0 + 1)
+        window[:k0] = 0.5 * (1.0 - np.cos(np.pi * j / (k0 + 1)))
 
-    nfft = int(oversample * 2 ** int(np.ceil(np.log2(max(2 * (n - 1), 2)))))
+    if mode == "lowpass":
+        nfft = int(oversample * 2 ** int(np.ceil(np.log2(max(2 * (n - 1), 2)))))
+        h = np.fft.irfft(X_ext * window, n=nfft)
+        tres = 1.0 / fu[-1]
+    else:
+        nfft = int(oversample * 2 ** int(np.ceil(np.log2(max(n, 2)))))
+        h = np.fft.ifft(X_ext * window, n=nfft)
+        tres = 1.0 / (fu[-1] - fu[0])
 
-    h = np.fft.irfft(X_ext * window, n=nfft)
-
-    df = fu[1] - fu[0]
     dt = 1.0 / (nfft * df)
     t = np.arange(nfft) * dt
     span = 1.0 / df
@@ -313,7 +396,7 @@ def to_time_domain(fu, X, extend: float = 0.25, oversample: int = 8,
 
     return TimeDomain(
         f=fu, f_ext=f_ext, t=t, t_sym=t_sym, h=h, window=window, nfft=nfft,
-        n_real=n_real, tres=1.0 / fu[-1], span=span, dt=dt,
+        n_real=n_real, tres=tres, span=span, dt=dt, mode=mode, k0=k0,
     )
 
 
@@ -373,9 +456,9 @@ def gate_around(td: TimeDomain, center: float, half_width: float,
 
 
 def gate_to_freq(td: TimeDomain, gate) -> np.ndarray:
-    """Retour en frequence de ``h * gate`` sur la bande reelle (0 .. f_max)."""
+    """Retour en frequence de ``h * gate`` sur la bande reelle (grille ``td.f``)."""
 
-    return np.fft.rfft(td.h * gate, n=td.nfft)[: td.n_real]
+    return np.fft.fft(td.h * gate)[td.k0: td.k0 + td.n_real]
 
 
 def find_peak(td: TimeDomain, t_min: float | None = None,
@@ -410,13 +493,18 @@ def find_peak(td: TimeDomain, t_min: float | None = None,
 # Racine carree complexe continue
 # ---------------------------------------------------------------------------
 
-def complex_sqrt_continuous(G, f=None, dc_fraction: float = 0.05) -> np.ndarray:
+def complex_sqrt_continuous(G, f=None, dc_fraction: float = 0.05,
+                            anchor_delay: float | None = None) -> np.ndarray:
     """
     sqrt(G) avec phase deroulee (continue en frequence).
 
-    Si ``f`` est fournie, la branche est choisie pour que la phase de G
-    extrapolee a DC soit ~0 modulo 2 pi : sqrt(G) est alors reelle positive
-    a basse frequence, comme le S21 d'un fixture passif.
+    Choix de la branche (sqrt a deux solutions, +/-) :
+      - ``anchor_delay`` donne (s) : la phase de sqrt(G) au premier point
+        est amenee au plus pres de -2 pi f[0] anchor_delay. A utiliser en
+        passe-bande, ou DC n'est pas dans la bande.
+      - sinon, si ``f`` est fournie : la phase de G extrapolee a DC est
+        ramenee a ~0 modulo 2 pi (sqrt(G) reelle positive a basse
+        frequence, comme le S21 d'un fixture passif).
     """
 
     G = np.asarray(G, dtype=complex)
@@ -425,8 +513,58 @@ def complex_sqrt_continuous(G, f=None, dc_fraction: float = 0.05) -> np.ndarray:
 
     if f is not None and len(G) >= 3:
         f = np.asarray(f, dtype=float)
-        n_fit = max(3, int(dc_fraction * len(f)))
-        _, intercept = np.polyfit(f[:n_fit], phase[:n_fit], 1)
-        phase = phase - 2.0 * np.pi * np.round(intercept / (2.0 * np.pi))
+        if anchor_delay is not None:
+            target = -2.0 * np.pi * f[0] * float(anchor_delay)
+            k = np.round((phase[0] - 2.0 * target) / (2.0 * np.pi))
+        else:
+            n_fit = max(3, int(dc_fraction * len(f)))
+            _, intercept = np.polyfit(f[:n_fit], phase[:n_fit], 1)
+            k = np.round(intercept / (2.0 * np.pi))
+        phase = phase - 2.0 * np.pi * k
 
     return mag * np.exp(1j * phase / 2.0)
+
+
+# ---------------------------------------------------------------------------
+# Post-traitement du S21 extrait
+# ---------------------------------------------------------------------------
+
+def smooth_db_phase(s, window: int, order: int = 3) -> np.ndarray:
+    """
+    Lissage Savitzky-Golay du module (dB) et de la phase deroulee d'un
+    parametre S. Contrairement a un lissage de Re/Im, la rotation rapide
+    de la phase n'est pas ecrasee. ``window`` <= 2 : aucun lissage.
+    """
+
+    s = np.asarray(s, dtype=complex)
+    n = len(s)
+    if window is None or window <= 2 or n < 7:
+        return s
+
+    w = _odd_window(window, n)
+    o = int(min(max(order, 1), w - 1))
+
+    db = savgol_filter(20.0 * np.log10(np.maximum(np.abs(s), 1e-15)), w, o)
+    phase = savgol_filter(np.unwrap(np.angle(s)), w, o)
+    return 10.0 ** (db / 20.0) * np.exp(1j * phase)
+
+
+def clamp_passive(s21, s11=None):
+    """
+    Impose |S21| <= 1 (et |S11|^2 + |S21|^2 <= 1 si S11 est fourni) en
+    conservant la phase. Retourne (s21_borne, nombre de points modifies).
+    """
+
+    s21 = np.asarray(s21, dtype=complex)
+    limit = np.ones(len(s21))
+    if s11 is not None:
+        limit = np.sqrt(np.clip(1.0 - np.abs(np.asarray(s11, dtype=complex)) ** 2, 0.0, 1.0))
+
+    mag = np.abs(s21)
+    over = mag > limit
+    if not np.any(over):
+        return s21, 0
+
+    out = s21.copy()
+    out[over] = s21[over] / np.maximum(mag[over], 1e-30) * limit[over]
+    return out, int(np.count_nonzero(over))

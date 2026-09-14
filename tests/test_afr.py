@@ -13,6 +13,7 @@ import pytest
 import skrf as rf
 
 from afr import deembed, metrics, reflect, thru
+from afr import signal as afr_signal
 from afr.signal import complex_sqrt_continuous, dc_uniform_grid
 
 FREQ = np.arange(10e6, 20e9 + 1, 10e6)
@@ -91,6 +92,7 @@ def test_band_edge_is_usable_up_to_fmax():
     phase_err = np.degrees(np.angle(est[edge] * np.conj(ref[edge])))
     assert np.max(np.abs(mag_err)) < 1.0, f"bord de bande : {np.max(np.abs(mag_err)):.2f} dB"
     assert np.max(np.abs(phase_err)) < 8.0
+    assert result.quality["mode"] == "lowpass"
 
     mid = (freq >= 5e9) & (freq <= 100e9)
     mag_err = 20 * np.log10(np.abs(est[mid])) - 20 * np.log10(np.abs(ref[mid]))
@@ -153,10 +155,92 @@ def test_fixture_from_open_short(line):
     assert mag < 0.3
     assert phase < 3.0
     assert abs(result.delay_ps - DELAY * 1e12) < 5.0
-    assert result.quality["open_short_mag_db"] < 0.2
+    assert result.quality["open_short_mag_db"] < 0.3
+    assert result.quality["model"] == "single_discontinuity"
     assert result.length_mm is None
     result.with_length(1.0)
     assert abs(result.length_mm - 89.94) < 0.5
+
+
+def test_single_discontinuity_beats_first_order_on_mismatch():
+    """Fixture court et desadapte : le modele exact doit nettement l'emporter."""
+
+    freq = np.arange(10e6, 200e9 + 1, 50e6)
+    line = synthetic_line(freq=freq, zc=100.0, delay=20e-12, loss_db_10ghz=2.0)
+    gamma = one_port(line, +1.0)
+
+    exact = reflect.fixture_from_reflect(freq, gamma, "OPEN")
+    first = reflect.fixture_from_reflect(freq, gamma, "OPEN", model="first_order")
+
+    band = freq >= 4e9
+    ref = line.s[band, 1, 0]
+
+    def worst(result):
+        est = result.network.s[band, 1, 0]
+        return float(np.max(np.abs(20 * np.log10(np.abs(est)) - 20 * np.log10(np.abs(ref)))))
+
+    assert worst(exact) < 0.6
+    assert worst(exact) < 0.3 * worst(first)
+    assert exact.quality["model"] == "single_discontinuity"
+
+
+def test_gamma1_from_open_short_is_exact():
+    """Sur une ligne, G1 resolu algebriquement vaut (Zc - Z0) / (Zc + Z0)."""
+
+    freq = np.arange(1e9, 50e9 + 1, 100e6)
+    line = synthetic_line(freq=freq, zc=ZC, delay=DELAY, loss_db_10ghz=0.0)
+    g1 = reflect.gamma1_from_open_short(one_port(line, +1.0), one_port(line, -1.0))
+
+    expected = (ZC - 50.0) / (ZC + 50.0)
+    assert np.max(np.abs(g1 - expected)) < 1e-6
+
+
+def test_deembed_input_inverts_the_model():
+    """La transformation de Moebius redonne exactement P^2."""
+
+    freq = np.arange(1e9, 50e9 + 1, 100e6)
+    g1 = 0.2 + 0.05j
+    p2 = np.exp(-2j * np.pi * freq * DELAY) ** 2 * 0.8
+
+    for gl in (1.0, -1.0):
+        gamma = g1 + (1 - g1 ** 2) * p2 * gl / (1 + g1 * p2 * gl)
+        assert np.max(np.abs(reflect.deembed_input(gamma, g1) / gl - p2)) < 1e-9
+
+
+def test_bandpass_mode_on_banded_measurement():
+    """Mesure d'extenseur 140-220 GHz : aucune extrapolation vers DC."""
+
+    freq = np.arange(140e9, 220e9 + 1, 100e6)
+    line = synthetic_line(freq=freq, delay=300e-12, loss_db_10ghz=2.0)
+    result = reflect.fixture_from_reflect(freq, one_port(line, +1.0), "OPEN")
+
+    assert result.quality["mode"] == "bandpass"
+    est, ref = result.network.s[:, 1, 0], line.s[:, 1, 0]
+    mag = np.max(np.abs(20 * np.log10(np.abs(est)) - 20 * np.log10(np.abs(ref))))
+    assert mag < 0.5, f"{mag:.2f} dB"
+    assert abs(result.delay_ps - 300.0) < 5.0
+    assert np.isnan(result.impedance_ohm)   # pas de DC : pas de profil TDR
+
+
+def test_passivity_clamp_and_smoothing():
+    s21 = np.array([1.4 + 0j, 0.9 + 0j, 1.01 + 0j])
+    clamped, count = afr_signal.clamp_passive(s21)
+    assert count == 2
+    assert np.all(np.abs(clamped) <= 1.0 + 1e-12)
+    assert abs(np.angle(clamped[0])) < 1e-12
+
+    freq = np.arange(1e9, 20e9 + 1, 50e6)
+    smooth = afr_signal.smooth_db_phase(np.exp(-2j * np.pi * freq * DELAY), 21)
+    assert np.max(np.abs(np.abs(smooth) - 1.0)) < 1e-6
+
+
+def test_gate_overlap_is_flagged():
+    """Fixture trop court pour la bande : chevauchement des fenetres signale."""
+
+    freq = np.arange(10e6, 40e9 + 1, 20e6)
+    line = synthetic_line(freq=freq, delay=5e-12, loss_db_10ghz=1.0)
+    result = reflect.fixture_from_reflect(freq, one_port(line, +1.0), "OPEN")
+    assert "warning" in result.quality
 
 
 def test_gamma_load_labels():

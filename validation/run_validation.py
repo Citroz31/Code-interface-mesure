@@ -55,11 +55,14 @@ def main():
     print("=" * 96)
     for label, result in results.items():
         result.with_length(REFERENCE["eps_r_eff"])
+        quality = result.quality
         print(f"{label:12s} : Z = {result.impedance_ohm:6.2f} ohm (ref {REFERENCE['zc']}), "
               f"TTD = {result.delay_ps:6.1f} ps (ref {REFERENCE['delay_ps']}), "
-              f"longueur = {result.length_mm:6.2f} mm, methode {result.method}")
-        if "warning" in result.quality:
-            print("   AVERTISSEMENT :", result.quality["warning"])
+              f"longueur = {result.length_mm:6.2f} mm")
+        print(f"{'':12s}   modele {quality.get('model')}, mode {quality.get('mode')}, "
+              f"passif {quality.get('passive')}, points bornes {quality.get('clamped_points', 0)}")
+        if "warning" in quality:
+            print("   AVERTISSEMENT :", quality["warning"])
     print("=" * 96)
 
     ok = True

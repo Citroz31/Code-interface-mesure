@@ -1,4 +1,4 @@
-! 2x-thru exact = fixture A + fixture A (port-swap) : Fixture A synthetique : ligne Zc=55.0 ohm, delai=300 ps, pertes 1.0 dB @10 GHz (~sqrt(f)), eps_r_eff=3.0 -> 51.93 mm, Z0=50 ohm
+! 2x-thru exact (fixture A + fixture A retourne) : Fixture A synthetique : ligne Zc=55.0 ohm, delai=300 ps, pertes 1.0 dB @10 GHz (~sqrt(f)), eps_r_eff=3.0 -> 51.93 mm, Z0=50 ohm
 ! Frequency(Hz) S11 S21 S12 S22 (Re Im)
 # Hz S RI R 50
 1.000000e+07 8.242019031e-04 3.542889564e-03 9.919945033e-01 -3.758264260e-02 9.919945033e-01 -3.758264260e-02 8.242019031e-04 3.542889564e-03

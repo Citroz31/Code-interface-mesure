@@ -19,7 +19,8 @@ EPS = 1e-12
 def _band_mask(f, band):
     f = np.asarray(f, dtype=float)
     lo, hi = band
-    mask = (f >= lo * f[-1]) & (f <= hi * f[-1])
+    span = f[-1] - f[0]
+    mask = (f >= f[0] + lo * span) & (f <= f[0] + hi * span)
     if mask.sum() < 3:
         mask = np.ones_like(f, dtype=bool)
     return mask
@@ -28,7 +29,7 @@ def _band_mask(f, band):
 def delay_from_phase(f, s21, band=(0.10, 0.60)) -> float:
     """
     Delai (s) = - pente de la phase deroulee de S21 / (2 pi), par regression
-    lineaire sur ``band`` (fractions de f_max). Estimateur par defaut :
+    lineaire sur ``band`` (fractions de la bande mesuree f[0] .. f[-1]). Estimateur par defaut :
     robuste au bruit haute frequence.
     """
 
@@ -89,8 +90,13 @@ def tdr_profile(f, gamma, z0: float = 50.0, interp_method: str = "Linear"):
     aller-retour ; seule la moitie sans repliement est retournee.
     """
 
+    f = np.asarray(f, dtype=float)
+    if f[0] > sig.LOWPASS_MAX_START * f[-1]:
+        # Pas de DC dans la bande : la reponse en echelon n'est pas definie.
+        return None, None
+
     fu, xu = sig.dc_uniform_grid(f, gamma, interp_method)
-    td = sig.to_time_domain(fu, xu)
+    td = sig.to_time_domain(fu, xu, mode="lowpass")
 
     # La reponse en echelon integre h depuis les temps negatifs : la moitie
     # de l'impulsion proche (t ~ 0) est repliee en fin de vecteur (t > span/2)
@@ -114,6 +120,8 @@ def tdr_impedance(f, gamma, delay_s: float, z0: float = 50.0,
     """
 
     t, z_t = tdr_profile(f, gamma, z0, interp_method)
+    if t is None:
+        return float("nan")
     round_trip = 2.0 * float(delay_s)
 
     mask = (t >= band[0] * round_trip) & (t <= band[1] * round_trip)

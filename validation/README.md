@@ -33,26 +33,38 @@ dependance `sqrt(f)`.
 
 ## Resultats obtenus (extraction executee sur ces fichiers)
 
-| Extraction | S21 ecart max 1-40 GHz | S21 ecart max 45-50 GHz | TTD | Z |
-|---|---|---|---|---|
-| OPEN seul | 0.064 dB / 0.12 deg | 0.041 dB / 0.40 deg | 300.0 ps | 56.8 ohm |
-| SHORT seul | 0.064 dB / 0.12 deg | 0.041 dB / 0.40 deg | 300.0 ps | 53.1 ohm |
-| OPEN + SHORT | 0.064 dB / 0.12 deg | 0.035 dB / 0.08 deg | 300.0 ps | 54.9 ohm |
+Modele a une discontinuite (defaut), bande 1 - 40 GHz :
 
-Reference : TTD = 300 ps, Z = 55 ohm.
+| Extraction | erreur S21 | erreur de phase S21 | ecart sur S11 | TTD |
+|---|---|---|---|---|
+| OPEN seul | 0.023 dB | 0.04 deg | 0.0075 | 300.0 ps |
+| SHORT seul | 0.034 dB | 0.04 deg | 0.0074 | 300.0 ps |
+| OPEN + SHORT | 0.028 dB | 0.00 deg | 0.0003 | 300.0 ps |
+
+Reference : TTD = 300 ps, Z = 55 ohm. L'ancien modele du premier ordre
+donnait un ecart |S11| de 0.044 sur les trois methodes : la difference tient
+a l'onde stationnaire, desormais reconstruite.
 
 ## Ce qu'il faut attendre dans le simulateur
 
 - `|S21|` et la phase de S21 des fichiers extraits se superposent a la
-  reference sur toute la bande (ecart < 0.1 dB, < 0.5 deg).
-- `S11` extrait est la reflexion proche seule (Gamma_1 = (55 - 50)/(55 + 50)
-  = 0.048, soit -26.4 dB, quasi constant). La reference contient en plus
-  l'onde stationnaire entre les deux bouts de ligne (ondulation jusqu'a
-  -20 dB) : l'ecart sur S11 est attendu, il traduit l'hypothese
-  « S22 = S11 » d'une extraction a partir d'un seul cote. Le de-embedding
-  reste correct au premier ordre pour un fixture faiblement desadapte.
-- Sur une vraie mesure, la comparaison pertinente est : DUT de-embedde avec
-  le fixture extrait contre DUT de-embedde avec le fixture de reference.
+  reference sur toute la bande (ecart < 0.05 dB).
+- `S11` extrait reproduit maintenant l'ondulation de l'onde stationnaire de
+  la reference, et non plus une valeur constante : avec OPEN + SHORT l'ecart
+  tombe a 0.0003 en lineaire. Le modele a une discontinuite reconstruit les
+  reflexions multiples a l'interieur du fixture.
+- Sur une mesure reelle, la comparaison la plus parlante reste : DUT
+  de-embedde avec le fixture extrait contre DUT de-embedde avec le fixture
+  de reference.
+
+## Cas limites couverts par les tests
+
+| Situation | Comportement |
+|---|---|
+| Mesure en bande (extenseur mmW, sans DC) | bascule automatique en mode passe-bande, aucune extrapolation vers DC |
+| Fixture court devant 1 / bande | fenetres proche et lointaine reduites, avertissement |
+| Pas de frequence trop grand | avertissement de repliement temporel, pas de frequence a viser |
+| Bruit qui pousse le module de S21 au-dessus de 1 | ramene a la limite passive, nombre de points signale |
 
 ## Relancer
 

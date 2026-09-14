@@ -1,6 +1,6 @@
 # Cahier des charges — Refonte de l'outil AFR (Automatic Fixture Removal)
 
-Version 0.2 — décisions validées le 10/09/2026, travaux démarrés (lots 0 à 2 livrés).
+Version 0.3 — lots 0 à 3 livrés ; méthode d'extraction S1P revue (modèle exact à une discontinuité).
 
 ## 1. Contexte
 
@@ -43,31 +43,33 @@ Mesure 1 port du fixture terminé par un standard :
 
     Γ_mes = S11 + S21² · Γ_L / (1 − S22 · Γ_L)
 
-### 4.1 Un seul standard (OPEN ou SHORT) — méthode actuelle corrigée
+### 4.1 Modèle retenu : une discontinuité (exact)
 
-- Grille uniforme partant de DC, fenêtre de Kaiser, réponse impulsionnelle par `irfft`.
-- Réflexion proche (fenêtre symétrique autour de t = 0) → S11.
-- Réflexion lointaine (fenêtre adaptative autour de t = 2τ) → Γ_far.
-- S21 = sqrt(Γ_far / Γ_L · (1 − S11²)), branche choisie pour que la phase tende vers 0 à DC.
-- Hypothèse forcée : S22 = S11, S12 = S21 (fixture symétrique et réciproque).
+Le fixture est vu comme une transition d'entrée de coefficient Γ₁ suivie d'une propagation aller P :
 
-Limites : S22 n'est pas mesurable avec un seul standard ; la réponse en bord de bande est amplifiée par la division par la fenêtre.
+    S11 = Γ₁ (1 − P²) / (1 − Γ₁² P²)
+    S21 = (1 − Γ₁²) P / (1 − Γ₁² P²)
 
-### 4.2 OPEN + SHORT combinés (recommandé quand les deux sont mesurés)
+Terminé par un standard Γ_L, il mesure Γ = Γ₁ + (1 − Γ₁²) P² Γ_L / (1 + Γ₁ P² Γ_L), relation qui s'inverse **exactement** :
 
-Relations exactes entre les deux mesures :
+    P² Γ_L = (Γ_mes − Γ₁) / (1 − Γ₁ Γ_mes)        (1)
 
-    Γ_o − Γ_s = 2 · S21² / (1 − S22²)
-    Γ_o + Γ_s = 2 · S11 + 2 · S21² · S22 / (1 − S22²)
+Retirer la transition d'entrée ne demande donc aucune approximation : les réflexions multiples internes sont prises en compte, et le résidu (1) ne contient plus qu'un seul écho, à t = 2τ, que l'on peut fenêtrer sans rien perdre du signal utile.
 
-Algorithme retenu (implémenté dans `afr/reflect.py`, `fixture_from_open_short`) :
+- **Un seul standard** : Γ₁ est la réflexion proche, obtenue en fenêtrant autour de t = 0.
+- **OPEN et SHORT** : P² est commun aux deux mesures et Γ_L change de signe, donc (1) donne Γ₁ sans aucun fenêtrage, par la racine de module < 1 de
 
-1. `M = (Γ_o + Γ_s)/2` : les réflexions lointaines (+S21²… et −S21²…) s'annulent, la partie proche de `M` donne S11 sans fuite du bout de ligne.
-2. `D = (Γ_o − Γ_s)/2` : la réflexion proche s'annule, la partie lointaine de `D` donne S21²/(1 − S11²) proprement.
-3. S21 = racine carrée continue de `D_far · (1 − S11²)`, branche fixée à DC.
-4. Contrôle de cohérence : S21 obtenu avec l'OPEN seul et avec le SHORT seul doivent coïncider (écart moyen en dB et en degrés, affiché dans le journal).
+      (Γ_o + Γ_s) Γ₁² − 2 (1 + Γ_o Γ_s) Γ₁ + (Γ_o + Γ_s) = 0        (2)
 
-**Limite physique importante** : un OPEN ou un SHORT placé directement au bout du fixture ne « voit » pas la transition fixture → 50 Ω côté DUT. Au premier ordre, la partie lointaine de `M` est nulle quel que soit le fixture : S22 n'est donc pas identifiable avec ces deux standards seuls. Le fixture reste supposé symétrique (S22 = S11). Pour lever cette hypothèse il faut soit le 2x-thru (déjà utilisé), soit un standard LOAD (OSL complet, sans fenêtrage).
+  C'est la méthode la plus précise. Sur une ligne synthétique, S11 et S21 sont exacts.
+
+### 4.2 Ancienne formule du premier ordre (conservée pour comparaison)
+
+S21² = Γ_far / Γ_L · (1 − S11²) à partir de la réflexion lointaine fenêtrée. Elle néglige les réflexions multiples : sur un fixture court et désadapté (100 Ω, 20 ps, 200 GHz) l'erreur atteint 3,4 dB contre 0,25 dB pour le modèle exact. Elle reste sélectionnable en page 3.
+
+### 4.2 bis Mesures en bande
+
+Une mesure qui ne commence pas près de DC (extenseur millimétrique, guide d'onde) est traitée en passe-bande : grille uniforme depuis f_min, enveloppe complexe, extrapolation des deux côtés de la bande, branche de la racine carrée ancrée sur le délai du pic. Forcer le traitement passe-bas sur une telle mesure coûtait jusqu'à 3 dB d'erreur.
 
 ### 4.3 2x-thru (fixture A + B)
 
@@ -154,7 +156,7 @@ Règles :
 | 0 | Filet de sécurité : fixtures synthétiques, tests automatiques, `requirements.txt`, `logging` — **livré** | — |
 | 1 | Extraction du noyau `afr/` (fonctions pures, suppression des doublons et du code mort ; le fichier interface passe de 5 190 à 3 190 lignes) — **livré** | 0 |
 | 2 | OPEN + SHORT combinés (§4.2), délai de ligne et longueur (§4.5), impédance TDR (§4.6), batch fichiers (page 6) — **livré**, contrôles qualité affichés dans le journal (interface en lot 3) | 1 |
-| 3 | Découpage de l'interface en `gui/` (pages, widgets, fenêtre de tracé), remplacement des `print` | 1 |
+| 3 | Fenêtre de tracé séparée (`gui/plot_window.py`), suppression des `print`, affichage des avertissements en page 3 — **livré** | 1 |
 | 4 | Améliorations : IEEE P370, multiport (≤ 32 ports), profil TDR tracé | 2, 3 |
 | 5 | Documentation utilisateur, README, exemple de bout en bout | 4 |
 

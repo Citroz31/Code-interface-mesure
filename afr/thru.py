@@ -24,7 +24,7 @@ import skrf as rf
 from . import metrics
 from . import signal as sig
 from .models import FixtureResult
-from .reflect import two_port
+from .reflect import prepare, two_port
 
 log = logging.getLogger(__name__)
 
@@ -66,15 +66,12 @@ def split_2x_thru(thru: rf.Network, interp_method: str = "Linear",
     s22 = thru.s[:, 1, 1]
 
     # Delai total : pic de la reponse impulsionnelle de S21
-    fu, X21 = sig.dc_uniform_grid(f, s21, interp_method)
-    td21 = sig.to_time_domain(fu, X21)
+    fu, td21 = prepare(f, s21, interp_method)
     t_total = sig.find_peak(td21, t_min=0.0)
 
     # Reflexions proches de chaque cote
-    _, X11 = sig.dc_uniform_grid(f, s11, interp_method)
-    _, X22 = sig.dc_uniform_grid(f, s22, interp_method)
-    td11 = sig.to_time_domain(fu, X11)
-    td22 = sig.to_time_domain(fu, X22)
+    _, td11 = prepare(f, s11, interp_method)
+    _, td22 = prepare(f, s22, interp_method)
 
     t_gate = max(2 * td11.tres, near_fraction * t_total)
     g_near = sig.gate_near(td11, t_gate)
@@ -85,7 +82,10 @@ def split_2x_thru(thru: rf.Network, interp_method: str = "Linear",
     # Transmission d'une demi-fixture
     rad = s21 * (1.0 - s11_half * s22_half)
     rad = np.where(np.abs(rad) < TINY, TINY + 0j, rad)
-    s21_half = sig.complex_sqrt_continuous(rad, f)
+    if td21.mode == "bandpass":
+        s21_half = sig.complex_sqrt_continuous(rad, f, anchor_delay=t_total / 2.0)
+    else:
+        s21_half = sig.complex_sqrt_continuous(rad, f)
 
     half_in = two_port(f, s11_half, s21_half, s21_half, s22_half, z0)
     half_in.name = "HALF_IN"
@@ -104,6 +104,7 @@ def split_2x_thru(thru: rf.Network, interp_method: str = "Linear",
     reconstruction = float(np.max(np.abs(rebuilt.s[:, 1, 0] - s21)))
 
     quality = {
+        "mode": td21.mode,
         "delay_total_ps": t_total * 1e12,
         "near_gate_ps": t_gate * 1e12,
         "time_span_ps": td21.span * 1e12,

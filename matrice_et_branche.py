@@ -375,6 +375,7 @@ class AFRWizardComplete(tk.Tk):
         # ==================================================
 
         self.enable_filter = tk.BooleanVar(value=False)
+        self.warnings = []
 
         self.filter_method = tk.StringVar(value="Savitzky-Golay")
         self.filter_window = tk.IntVar(value=11)
@@ -613,6 +614,62 @@ class AFRWizardComplete(tk.Tk):
 
         return value if value > 0 else 1.0
 
+    def extraction_options(self):
+        """Options d'extraction communes aux methodes S1P et 2x-thru."""
+
+        try:
+            smooth = int(self.smooth_points.get())
+        except (tk.TclError, ValueError, AttributeError):
+            smooth = 0
+
+        return dict(
+            interp_method=self.interpolation_name(),
+            smooth_points=max(0, smooth),
+            enforce_passivity=bool(self.enforce_passivity.get()),
+            model=self.extraction_model.get(),
+        )
+
+    def report_quality(self, label, result):
+        """Journalise les indicateurs de qualite et affiche les avertissements."""
+
+        quality = result.quality
+
+        log.info("%s : mode %s, modele %s, passif %s, |S|max %.4f",
+                 label, quality.get("mode"), quality.get("model"),
+                 quality.get("passive"), quality.get("max_singular_value", float("nan")))
+
+        clamped = quality.get("clamped_points", 0)
+        if clamped:
+            self.add_warning(f"{label} : {clamped} point(s) de |S21| au-dessus de la "
+                             f"limite passive ont ete ramenes a cette limite.")
+
+        if quality.get("warning"):
+            self.add_warning(f"{label} : {quality['warning']}")
+
+        if not quality.get("passive", True):
+            self.add_warning(f"{label} : reseau non passif "
+                             f"(valeur singuliere max {quality.get('max_singular_value', 0):.3f}).")
+
+    def add_warning(self, message):
+        """Empile un avertissement et le montre dans la zone de resultats."""
+
+        self.warnings.append(message)
+        log.warning(message)
+
+        if hasattr(self, "warning_text"):
+            self.warning_text.config(state="normal")
+            self.warning_text.insert("end", message + "\n")
+            self.warning_text.see("end")
+            self.warning_text.config(state="disabled")
+
+    def clear_warnings(self):
+        self.warnings = []
+
+        if hasattr(self, "warning_text"):
+            self.warning_text.config(state="normal")
+            self.warning_text.delete("1.0", "end")
+            self.warning_text.config(state="disabled")
+
     def build_afr_s2p_from_s1p(self, filename, reflect_type=None):
         """
         S2P d'un fixture a partir d'un S1P OPEN ou SHORT (voir afr.reflect).
@@ -628,14 +685,16 @@ class AFRWizardComplete(tk.Tk):
             gamma,
             reflect_type or filename,
             z0=afr_io.reference_impedance(ntwk),
-            interp_method=self.interpolation_name(),
+            **self.extraction_options(),
         )
         result.with_length(self.eps_r_value())
 
+        label = reflect_type or Path(filename).stem
         log.info(
             "%s : Z = %.1f ohm, TTD = %.1f ps, longueur = %.2f mm",
-            Path(filename).name, result.impedance_ohm, result.delay_ps, result.length_mm,
+            label, result.impedance_ohm, result.delay_ps, result.length_mm,
         )
+        self.report_quality(label, result)
         return result
 
     def build_open_short_fixture(self, open_file, short_file):
@@ -654,8 +713,9 @@ class AFRWizardComplete(tk.Tk):
             self.apply_filter(n_open.s[:, 0, 0], freq),
             self.apply_filter(n_short.s[:, 0, 0], freq),
             z0=afr_io.reference_impedance(n_open),
-            interp_method=self.interpolation_name(),
+            **self.extraction_options(),
         )
+        self.report_quality(f"{Path(open_file).stem} + {Path(short_file).stem}", result)
         return result.with_length(self.eps_r_value())
 
     def build_half_thru(self, thru_file, source_key="THRU_LINE1"):
@@ -678,6 +738,10 @@ class AFRWizardComplete(tk.Tk):
             filtered,
             self.interpolation_name(),
         )
+
+        for key, value in information["quality"].items():
+            if key == "warning":
+                self.add_warning(f"{source_key} : {value}")
 
         length_mm = afr_metrics.physical_length(
             information["delay1"] * 1e-12,
@@ -757,7 +821,10 @@ class AFRWizardComplete(tk.Tk):
         name = self.row_name(port)
         suffix = f"  [{source}]" if source else ""
 
-        z_var.set(f"{name} Z = {impedance:.2f} Ohm")
+        if impedance is None or not np.isfinite(impedance):
+            z_var.set(f"{name} Z = --  (pas de continu dans la bande)")
+        else:
+            z_var.set(f"{name} Z = {impedance:.2f} Ohm")
         d_var.set(f"{name} TTD = {delay_ps:.2f} ps{suffix}")
 
         self.row_delays[port] = delay_ps
@@ -1555,6 +1622,11 @@ class AFRWizardComplete(tk.Tk):
         self.port_result_rows = {}
         self.row_delays = {}
 
+        warning_box = ttk.LabelFrame(calc, text="Warnings", padding=6)
+        warning_box.pack(fill="x", pady=(8, 0))
+        self.warning_text = tk.Text(warning_box, height=4, state="disabled", wrap="word")
+        self.warning_text.pack(fill="x")
+
         ttk.Label(calc, text="Length").pack(anchor="w")
         td=ttk.LabelFrame(self.page3,text="Time Domain Settings",style="Section.TLabelframe",padding=12); td.pack(fill="x")
         self.step_rise=tk.DoubleVar(value=17.9880)
@@ -1564,6 +1636,33 @@ class AFRWizardComplete(tk.Tk):
         self.filter_method = tk.StringVar(value="Phase Only")
         r=ttk.Frame(td); r.pack(anchor="w"); ttk.Label(r,text="Step Rise Time:").pack(side="left")
         ttk.Entry(r,textvariable=self.step_rise,width=10).pack(side="left",padx=5); ttk.Label(r,text="ps").pack(side="left")
+        self.extraction_model = tk.StringVar(value="single_discontinuity")
+        self.smooth_points = tk.IntVar(value=0)
+        self.enforce_passivity = tk.BooleanVar(value=True)
+
+        model_frame = ttk.LabelFrame(td, text="Extraction model", padding=8)
+        model_frame.pack(fill="x", pady=(6, 4))
+        ttk.Radiobutton(
+            model_frame,
+            text="Single discontinuity (exact, recommended)",
+            value="single_discontinuity",
+            variable=self.extraction_model,
+        ).pack(anchor="w")
+        ttk.Radiobutton(
+            model_frame,
+            text="First order (legacy, multiple reflections neglected)",
+            value="first_order",
+            variable=self.extraction_model,
+        ).pack(anchor="w")
+
+        row_opt = ttk.Frame(model_frame)
+        row_opt.pack(anchor="w", pady=(6, 0))
+        ttk.Label(row_opt, text="Smoothing (points, 0 = none):").pack(side="left")
+        ttk.Spinbox(row_opt, from_=0, to=201, increment=2, width=6,
+                    textvariable=self.smooth_points).pack(side="left", padx=5)
+        ttk.Checkbutton(row_opt, text="Enforce passivity (|S21| <= 1)",
+                        variable=self.enforce_passivity).pack(side="left", padx=15)
+
         self.eps_r_eff = tk.DoubleVar(value=1.0)
         self.eps_r_eff.trace_add("write", lambda *_: self.refresh_length_labels())
         r_eps = ttk.Frame(td); r_eps.pack(anchor="w", pady=(4, 0))
@@ -1817,6 +1916,7 @@ class AFRWizardComplete(tk.Tk):
                     self.calculate_thru_fixture(key)
 
             self._measured_cache = {}
+            self.clear_warnings()
             self.calculate_reflection_fixtures()
             self.update_fixture_result_labels()
 
