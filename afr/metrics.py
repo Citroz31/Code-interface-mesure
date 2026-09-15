@@ -83,6 +83,30 @@ def impedance_from_reflection(gamma, z0: float = 50.0) -> np.ndarray:
     return z0 * (1.0 + gamma) / denominator
 
 
+def impedance_from_gamma1(g1, z0: float = 50.0, band=(0.0, 1.0)) -> float:
+    """
+    Impedance caracteristique deduite de la reflexion proche G1 :
+
+        Z = Z0 (1 + G1) / (1 - G1)
+
+    Mediane de la partie reelle sur la portion ``band`` de la bande. Ne
+    demande pas le continu : c'est l'estimateur utilise pour une mesure en
+    bande, ou la reponse en echelon (TDR) n'est pas definie.
+    """
+
+    g1 = np.asarray(g1, dtype=complex)
+    n = len(g1)
+    lo = int(band[0] * (n - 1))
+    hi = int(band[1] * (n - 1)) + 1
+
+    window = g1[lo:hi]
+    if len(window) < 3:
+        window = g1
+
+    z = impedance_from_reflection(window, z0)
+    return float(np.median(np.real(z)))
+
+
 def tdr_profile(f, gamma, z0: float = 50.0, interp_method: str = "Linear"):
     """
     Profil d'impedance TDR : reponse en echelon (integrale de la reponse

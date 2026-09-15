@@ -549,22 +549,73 @@ def smooth_db_phase(s, window: int, order: int = 3) -> np.ndarray:
     return 10.0 ** (db / 20.0) * np.exp(1j * phase)
 
 
+def clamp_unit(x, limit: float = 1.0):
+    """
+    Borne le module de ``x`` a ``limit`` en conservant la phase.
+    Retourne ``(x_borne, nombre de points modifies)``.
+    """
+
+    x = np.asarray(x, dtype=complex)
+    mag = np.abs(x)
+    over = mag > limit
+
+    if not np.any(over):
+        return x, 0
+
+    out = x.copy()
+    out[over] = x[over] / np.maximum(mag[over], 1e-30) * limit
+    return out, int(np.count_nonzero(over))
+
+
 def clamp_passive(s21, s11=None):
     """
-    Impose |S21| <= 1 (et |S11|^2 + |S21|^2 <= 1 si S11 est fourni) en
-    conservant la phase. Retourne (s21_borne, nombre de points modifies).
+    Rend passif un 2 ports symetrique reciproque S = [[a, b], [b, a]], en
+    reduisant si necessaire le module de b = S21 et en conservant sa phase.
+
+    Une telle matrice est normale : ses valeurs singulieres valent |a + b| et
+    |a - b|. La passivite s'ecrit donc
+
+        |a + b| <= 1  et  |a - b| <= 1
+
+    et non |a|^2 + |b|^2 <= 1, qui est la norme d'une colonne et ne suffit
+    pas (a = 0.30, b = 0.95 passe ce dernier test mais donne |a + b| = 1.25).
+
+    On cherche le plus grand facteur k de [0, 1] tel que ``a +/- k b`` reste
+    dans le disque unite. Chaque condition est un trinome en k :
+
+        k^2 |b|^2 +/- 2 k Re(a conj(b)) + |a|^2 - 1 <= 0
+
+    Retourne ``(s21_borne, nombre de points modifies)``.
     """
 
-    s21 = np.asarray(s21, dtype=complex)
-    limit = np.ones(len(s21))
-    if s11 is not None:
-        limit = np.sqrt(np.clip(1.0 - np.abs(np.asarray(s11, dtype=complex)) ** 2, 0.0, 1.0))
+    b = np.asarray(s21, dtype=complex)
 
-    mag = np.abs(s21)
-    over = mag > limit
-    if not np.any(over):
-        return s21, 0
+    if s11 is None:
+        return clamp_unit(b)
 
-    out = s21.copy()
-    out[over] = s21[over] / np.maximum(mag[over], 1e-30) * limit[over]
-    return out, int(np.count_nonzero(over))
+    a = np.asarray(s11, dtype=complex)
+
+    quad = np.abs(b) ** 2
+    const = np.abs(a) ** 2 - 1.0
+    cross = np.real(a * np.conj(b))
+
+    factor = np.ones(len(b))
+
+    for sign in (+1.0, -1.0):
+        linear = sign * cross
+        disc = linear ** 2 - quad * const           # >= 0 des que |a| <= 1
+        disc = np.maximum(disc, 0.0)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            root = (-linear + np.sqrt(disc)) / quad
+
+        # |b| nul : aucune contrainte sur k
+        root = np.where(quad > 1e-30, root, 1.0)
+        factor = np.minimum(factor, np.maximum(root, 0.0))
+
+    # |S11| deja au-dela de 1 : le probleme vient de la reflexion, pas de S21
+    factor = np.where(np.abs(a) >= 1.0, 0.0, factor)
+    factor = np.clip(factor, 0.0, 1.0)
+
+    changed = int(np.count_nonzero(factor < 1.0 - 1e-12))
+    return b * factor, changed

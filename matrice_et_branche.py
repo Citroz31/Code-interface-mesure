@@ -640,10 +640,26 @@ class AFRWizardComplete(tk.Tk):
                  label, quality.get("mode"), quality.get("model"),
                  quality.get("passive"), quality.get("max_singular_value", float("nan")))
 
+        measured_over = quality.get("measured_over_unit", 0)
+        if measured_over:
+            self.add_warning(
+                f"{label} : le fichier mesure contient {measured_over} point(s) avec "
+                f"|Gamma| > 1. La mesure elle-meme n'est pas passive : verifier la "
+                f"calibration du VNA avant d'exploiter l'extraction."
+            )
+
+        over_p = quality.get("clamped_propagation", 0)
+        if over_p:
+            self.add_warning(
+                f"{label} : {over_p} point(s) de propagation au-dessus de 1 ramenes a 1. "
+                f"Cause probable : standard OPEN/SHORT imparfait, ou bande trop etroite "
+                f"pour separer les reflexions."
+            )
+
         clamped = quality.get("clamped_points", 0)
         if clamped:
-            self.add_warning(f"{label} : {clamped} point(s) de |S21| au-dessus de la "
-                             f"limite passive ont ete ramenes a cette limite.")
+            self.add_warning(f"{label} : {clamped} point(s) ramenes a la limite passive "
+                             f"(critere sur les valeurs singulieres).")
 
         if quality.get("warning"):
             self.add_warning(f"{label} : {quality['warning']}")
@@ -1067,7 +1083,7 @@ class AFRWizardComplete(tk.Tk):
         suffix = f"  [{source}]" if source else ""
 
         if impedance is None or not np.isfinite(impedance):
-            z_var.set(f"{name} Z = --  (pas de continu dans la bande)")
+            z_var.set(f"{name} Z = --")
         else:
             z_var.set(f"{name} Z = {impedance:.2f} Ohm")
         d_var.set(f"{name} TTD = {delay_ps:.2f} ps{suffix}")

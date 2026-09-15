@@ -137,8 +137,11 @@ def _gates(td: sig.TimeDomain, t_far: float):
         message = (
             f"Fixture court devant la resolution temporelle "
             f"({td.tres * 1e12:.1f} ps pour un aller-retour de {t_far * 1e12:.1f} ps) : "
-            f"fenetres proche et lointaine reduites. Elargir la bande de mesure "
-            f"pour separer les deux reflexions."
+            f"les fenetres proche et lointaine se recouvrent et ont ete reduites. "
+            f"La reflexion d'entree est alors surestimee, donc l'impedance aussi. "
+            f"Deux remedes : mesurer OPEN et SHORT du meme cote (la reflexion "
+            f"d'entree est alors resolue algebriquement, sans fenetrage), ou "
+            f"elargir la bande de mesure."
         )
         log.warning(message)
         quality["warning"] = message
@@ -221,8 +224,31 @@ def _gate_echo(fu, x, t_far: float, td_ref: sig.TimeDomain, half_fraction: float
 # Assemblage du resultat
 # ---------------------------------------------------------------------------
 
+def constrain_physical(g1, propagation, quality):
+    """
+    Contraint le modele a rester physique avant d'en deduire S11 et S21 :
+    un fixture passif a |G1| <= 1 (reflexion) et |P| <= 1 (propagation).
+
+    Sans cette borne, un G1 entache d'erreur de fenetre combine a un P
+    legerement superieur a 1 fait diverger S21 = (1 - G1^2) P / (1 - G1^2 P^2)
+    bien au-dela de la limite passive.
+    """
+
+    g1, over_g1 = sig.clamp_unit(g1, 1.0 - 1e-9)
+    propagation, over_p = sig.clamp_unit(propagation, 1.0)
+
+    quality["clamped_gamma1"] = over_g1
+    quality["clamped_propagation"] = over_p
+
+    if over_p:
+        log.warning("%d point(s) de propagation au-dessus de 1 (fixture actif) "
+                    "ramenes a 1 : verifier le standard et la calibration.", over_p)
+
+    return g1, propagation
+
+
 def _finish(f, fu, s11u, s21u, gamma_for_tdr, z0, method, quality, interp_method,
-            smooth_points: int = 0, enforce_passivity: bool = True):
+            smooth_points: int = 0, enforce_passivity: bool = True, g1=None):
     s11 = sig.resample(f, fu, s11u)
     s21 = sig.resample(f, fu, s21u)
 
@@ -246,6 +272,14 @@ def _finish(f, fu, s11u, s21u, gamma_for_tdr, z0, method, quality, interp_method
 
     impedance = metrics.tdr_impedance(f, gamma_for_tdr, delay, z0,
                                       interp_method=interp_method)
+
+    # Sans continu dans la bande, la reponse en echelon n'est pas definie :
+    # on se rabat sur la reflexion proche, qui reste disponible.
+    if not np.isfinite(impedance) and g1 is not None:
+        impedance = metrics.impedance_from_gamma1(g1, z0)
+        quality["impedance_source"] = "gamma1"
+    else:
+        quality["impedance_source"] = "tdr"
 
     quality = dict(quality)
     quality["delay_peak_ps"] = quality["gate_center_ps"] / 2.0
@@ -286,6 +320,11 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
     f = np.asarray(f, dtype=float)
     gamma = np.asarray(gamma, dtype=complex)
 
+    over_unit = int(np.count_nonzero(np.abs(gamma) > 1.0 + 1e-6))
+    if over_unit:
+        log.warning("Le fichier mesure contient %d point(s) avec |Gamma| > 1 : "
+                    "la mesure elle-meme n'est pas passive (calibration).", over_unit)
+
     fu, td = prepare(f, gamma, interp_method)
     gamma_u = sig.resample(fu, f, gamma)
 
@@ -294,6 +333,7 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
     quality["mode"] = td.mode
     quality["model"] = model
     quality["load"] = "SHORT" if gl < 0 else "OPEN"
+    quality["measured_over_unit"] = over_unit
 
     g1 = sig.gate_to_freq(td, g_near)
 
@@ -302,10 +342,11 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
         residual = deembed_input(gamma_u, g1) / gl
         p_squared = _gate_echo(fu, residual, t_far, td)
         propagation = _sqrt(_safe(p_squared, TINY), fu, td, t_far)
-        s11u, s21u = network_from_model(g1, propagation)
         quality["model_residual"] = float(
             np.max(np.abs(propagation * propagation - p_squared))
         )
+        g1, propagation = constrain_physical(g1, propagation, quality)
+        s11u, s21u = network_from_model(g1, propagation)
     else:
         far = sig.gate_to_freq(td, g_far)
         s21_squared = _safe((far / gl) * (1.0 - g1 * g1), TINY)
@@ -317,7 +358,7 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
         "" if model == "single_discontinuity" else "_first_order")
 
     return _finish(f, fu, s11u, s21u, gamma, z0, method, quality, interp_method,
-                   smooth_points, enforce_passivity)
+                   smooth_points, enforce_passivity, g1=g1)
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +408,7 @@ def fixture_from_open_short(f, gamma_open, gamma_short, z0: float = 50.0,
 
     p_squared = _gate_echo(fu, p_squared_raw, t_far, td_p)
     propagation = _sqrt(_safe(p_squared, TINY), fu, td_p, t_far)
+    g1, propagation = constrain_physical(g1, propagation, quality)
     s11u, s21u = network_from_model(g1, propagation)
 
     quality["mode"] = td_p.mode
@@ -378,7 +420,7 @@ def fixture_from_open_short(f, gamma_open, gamma_short, z0: float = 50.0,
 
     return _finish(f, fu, s11u, s21u, 0.5 * (gamma_open + gamma_short), z0,
                    "reflect_open_short", quality, interp_method,
-                   smooth_points, enforce_passivity)
+                   smooth_points, enforce_passivity, g1=g1)
 
 
 def _open_short_first_order(f, gamma_open, gamma_short, z0, interp_method,
@@ -408,7 +450,7 @@ def _open_short_first_order(f, gamma_open, gamma_short, z0, interp_method,
     _open_short_consistency(f, gamma_open, gamma_short, z0, interp_method, quality)
 
     return _finish(f, fu, s11u, s21u, mean, z0, "reflect_open_short_first_order",
-                   quality, interp_method, smooth_points, enforce_passivity)
+                   quality, interp_method, smooth_points, enforce_passivity, g1=s11u)
 
 
 def _open_short_consistency(f, gamma_open, gamma_short, z0, interp_method, quality):

@@ -76,6 +76,26 @@ Les extractions individuelles sont toujours calculees et exportees
 extractions est mesure : au-dela de 1 dB un avertissement invite a verifier
 les standards ou a n'en garder qu'un.
 
+## Fixture court, bande etroite : preferer OPEN + SHORT
+
+Le fenetrage temporel ne separe la reflexion d'entree de celle du bout de
+ligne que si la resolution temporelle (1 / bande mesuree) est nettement plus
+courte que l'aller-retour dans le fixture (2 x TTD). Sinon les deux fenetres
+se recouvrent, la reflexion d'entree est surestimee et l'impedance avec elle.
+
+Avec OPEN **et** SHORT du meme cote, la reflexion d'entree est resolue
+algebriquement, sans aucun fenetrage : le probleme disparait. Mesure
+synthetique d'un fixture de 70 ps sur 2 - 20 GHz (resolution 56 ps pour un
+aller-retour de 140 ps, donc recouvrement) :
+
+| Methode | reflexion d'entree (attendu 0.048) | Z (attendu 55) | erreur S21 |
+|---|---|---|---|
+| OPEN seul | 0.096 | 52.2 ohm | 1.15 dB |
+| OPEN + SHORT | 0.048 | 55.0 ohm | 0.57 dB |
+
+Elargir la bande a 1 - 40 GHz supprime le recouvrement et ramene l'ecart de
+l'OPEN seul a 0.33 dB.
+
 ## Lignes d'entree et de sortie de longueurs differentes
 
 La cascade utilisee est `mesure = fixture_entree ** DUT ** fixture_sortie`.
@@ -114,8 +134,12 @@ surestimes. Le resultat est disponible dans la fenetre de trace sous le nom
   passe-bande) et seul ce prolongement est attenue : les resultats restent
   exploitables jusqu'a la derniere frequence mesuree.
 - Des avertissements signalent un pas de frequence trop grand (repliement),
-  un fixture trop court pour la bande (fenetres qui se chevauchent) et les
-  points ramenes a la limite passive.
+  un fixture trop court pour la bande (fenetres qui se chevauchent), une
+  mesure d'entree elle-meme non passive (|Gamma| > 1, defaut de calibration)
+  et les points ramenes a la limite passive.
+- Sans continu dans la bande, l'impedance ne vient plus de la reponse en
+  echelon (non definie) mais de la reflexion proche, Z = Z0 (1 + G1)/(1 - G1).
+  Elle est donc affichee au lieu d'un tiret.
 
 ## Longueur de ligne
 

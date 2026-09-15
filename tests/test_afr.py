@@ -219,15 +219,35 @@ def test_bandpass_mode_on_banded_measurement():
     mag = np.max(np.abs(20 * np.log10(np.abs(est)) - 20 * np.log10(np.abs(ref))))
     assert mag < 0.5, f"{mag:.2f} dB"
     assert abs(result.delay_ps - 300.0) < 5.0
-    assert np.isnan(result.impedance_ohm)   # pas de DC : pas de profil TDR
+    # pas de continu : l'impedance vient de la reflexion proche, pas de la TDR
+    assert result.quality["impedance_source"] == "gamma1"
+    assert abs(result.impedance_ohm - ZC) < 3.0
 
 
-def test_passivity_clamp_and_smoothing():
-    s21 = np.array([1.4 + 0j, 0.9 + 0j, 1.01 + 0j])
-    clamped, count = afr_signal.clamp_passive(s21)
+def test_passivity_clamp_uses_singular_values():
+    """Le critere est max(|a+b|, |a-b|) <= 1, pas |a|^2 + |b|^2 <= 1."""
+
+    s11 = np.array([0.30 + 0j, 0.10 + 0.20j, 0.05 + 0j])
+    s21 = np.array([0.95 + 0j, 1.20 - 0.30j, 0.40 + 0j])
+
+    clamped, count = afr_signal.clamp_passive(s21, s11)
+    assert count == 2                       # le troisieme point est deja passif
+
+    for a, b in zip(s11, clamped):
+        assert max(abs(a + b), abs(a - b)) <= 1.0 + 1e-9
+
+    # la phase est conservee, seul le module est reduit
+    assert abs(np.angle(clamped[1]) - np.angle(s21[1])) < 1e-12
+    # l'ancien critere |a|^2 + |b|^2 <= 1 aurait laisse passer le premier point
+    assert abs(s11[0]) ** 2 + abs(s21[0]) ** 2 < 1.0
+    assert abs(clamped[0]) < abs(s21[0])
+
+
+def test_clamp_unit_and_smoothing():
+    bounded, count = afr_signal.clamp_unit(np.array([1.4 + 0j, 0.9 + 0j, 1.01 + 0j]))
     assert count == 2
-    assert np.all(np.abs(clamped) <= 1.0 + 1e-12)
-    assert abs(np.angle(clamped[0])) < 1e-12
+    assert np.all(np.abs(bounded) <= 1.0 + 1e-12)
+    assert abs(np.angle(bounded[0])) < 1e-12
 
     freq = np.arange(1e9, 20e9 + 1, 50e6)
     smooth = afr_signal.smooth_db_phase(np.exp(-2j * np.pi * freq * DELAY), 21)
