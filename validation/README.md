@@ -31,6 +31,35 @@ dependance `sqrt(f)`.
 | `FIXTURE_A_from_OPEN_SHORT.s2p` | fixture extrait des deux mesures combinees (methode recommandee) |
 | `run_validation.py` | regenere les trois S2P extraits avec le noyau `afr/`, ecrit `THRU_2X_half_in.s2p`, affiche les ecarts et trace `validation_plot.png` |
 
+## Chaine complete : ligne A + DUT + ligne B
+
+Le dossier contient aussi de quoi verifier le de-embedding de bout en bout,
+avec deux lignes **de longueurs differentes** :
+
+| Element | Zc | TTD | Pertes |
+|---|---|---|---|
+| Ligne A (entree) | 55 ohm | 300 ps | 1.0 dB a 10 GHz |
+| DUT | 62 ohm | 80 ps | 0.4 dB a 10 GHz |
+| Ligne B (sortie) | 48 ohm | 120 ps | 0.6 dB a 10 GHz |
+
+| Fichier | Contenu |
+|---|---|
+| `RAW_MEASUREMENT.s2p` | la mesure brute : ligne A + DUT + ligne B |
+| `DUT_reference.s2p` | le DUT seul, reference exacte |
+| `OPEN_B.s1p`, `SHORT_B.s1p` | standards du cote sortie |
+| `FIXTURE_B_reference.s2p` | ligne B exacte |
+| `DUT_deembedded.s2p` | resultat du de-embedding (ecrit par le script) |
+
+Resultat obtenu, fixtures **extraits** de leurs propres standards (pas les
+references), bande 1 - 40 GHz :
+
+| Fixtures utilises | erreur S21 | erreur de phase | ecart sur S11 |
+|---|---|---|---|
+| exacts | 0.0000 dB | 0.000 deg | 0.0000 |
+| extraits des OPEN / SHORT | 0.0410 dB | 0.002 deg | 0.0007 |
+
+La correction retire 2.18 dB de perte d'insertion en moyenne, 3.24 dB au plus.
+
 ## Resultats obtenus (extraction executee sur ces fichiers)
 
 Modele a une discontinuite (defaut), bande 1 - 40 GHz :

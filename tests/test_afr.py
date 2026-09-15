@@ -287,6 +287,83 @@ def test_split_2x_thru(line):
     assert np.allclose(half_out.s[:, 0, 0], half_in.s[:, 1, 1])
 
 
+def test_model_fit_detects_a_fixture_the_model_cannot_describe():
+    """
+    L'indicateur d'ajustement doit rester tres bon sur une ligne simple et se
+    degrader nettement sur un fixture a deux discontinuites fortes.
+    """
+
+    simple = synthetic_line(zc=55.0, delay=300e-12, loss_db_10ghz=1.0)
+    good = reflect.fixture_from_reflect(FREQ, one_port(simple, +1.0), "OPEN")
+    assert good.quality["fit_rms"] < 0.02
+    assert "fit_warning" not in good.quality
+
+    # deux tronçons tres desadaptes en serie : le modele a une seule
+    # discontinuite ne peut pas decrire ce fixture
+    first = synthetic_line(zc=90.0, delay=150e-12, loss_db_10ghz=0.5)
+    second = synthetic_line(zc=25.0, delay=150e-12, loss_db_10ghz=0.5)
+    hard = first ** second
+
+    bad = reflect.fixture_from_reflect(FREQ, one_port(hard, +1.0), "OPEN")
+    assert bad.quality["fit_rms"] > good.quality["fit_rms"]
+
+
+def test_predict_reflect_round_trip(line):
+    """Le modele applique au fixture de reference redonne la mesure 1 port."""
+
+    for gl in (1.0, -1.0):
+        assert np.max(np.abs(reflect.predict_reflect(line, gl) - one_port(line, gl))) < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# chaine complete : ligne A + DUT + ligne B
+# ---------------------------------------------------------------------------
+
+def test_full_chain_deembedding(asymmetric):
+    """
+    Mesure brute ligne A + DUT + ligne B, corrigee avec les fixtures EXTRAITS
+    de leurs propres standards OPEN et SHORT. C'est le parcours reel.
+    """
+
+    fixture_in, fixture_out, side_b, _ = asymmetric
+    dut = synthetic_line(zc=62.0, delay=80e-12, loss_db_10ghz=0.4)
+    raw = deembed.embed_fixtures(dut, fixture_in, fixture_out)
+
+    extracted_a = reflect.fixture_from_open_short(
+        FREQ, one_port(fixture_in, +1.0), one_port(fixture_in, -1.0)
+    ).network
+    extracted_b = thru.as_output_fixture(
+        reflect.fixture_from_open_short(
+            FREQ, one_port(side_b, +1.0), one_port(side_b, -1.0)
+        ).network
+    )
+
+    recovered = deembed.remove_fixtures(raw, extracted_a, extracted_b)
+
+    band = (FREQ >= 1e9) & (FREQ <= 15e9)
+    est, ref = recovered.s[band, 1, 0], dut.s[band, 1, 0]
+    mag = np.max(np.abs(20 * np.log10(np.abs(est)) - 20 * np.log10(np.abs(ref))))
+    phase = np.max(np.abs(np.degrees(np.angle(est * np.conj(ref)))))
+
+    assert mag < 0.2, f"{mag:.3f} dB"
+    assert phase < 1.0
+    assert metrics.quality_report(recovered.s)["passive"]
+
+    # la correction doit bien retirer de la perte, pas en ajouter
+    gain = 20 * np.log10(np.abs(est)) - 20 * np.log10(np.abs(raw.s[band, 1, 0]))
+    assert np.mean(gain) > 0.5
+
+
+def test_identity_removal_changes_nothing(asymmetric):
+    """Ne retirer aucun fixture doit laisser la mesure inchangee."""
+
+    fixture_in, fixture_out, _, _ = asymmetric
+    dut = synthetic_line(zc=62.0, delay=80e-12)
+    raw = deembed.embed_fixtures(dut, fixture_in, fixture_out)
+
+    assert np.max(np.abs(deembed.remove_fixtures(raw, None, None).s - raw.s)) < 1e-12
+
+
 # ---------------------------------------------------------------------------
 # fixtures asymetriques (deux lignes de longueurs differentes)
 # ---------------------------------------------------------------------------

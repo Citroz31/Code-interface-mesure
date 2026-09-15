@@ -377,6 +377,7 @@ class AFRWizardComplete(tk.Tk):
         self.enable_filter = tk.BooleanVar(value=False)
         self.warnings = []
         self.thru_networks = {}
+        self.deembedded_network = None
         self.fixture_assembly = {}
 
         self.filter_method = tk.StringVar(value="Savitzky-Golay")
@@ -639,6 +640,15 @@ class AFRWizardComplete(tk.Tk):
         log.info("%s : mode %s, modele %s, passif %s, |S|max %.4f",
                  label, quality.get("mode"), quality.get("model"),
                  quality.get("passive"), quality.get("max_singular_value", float("nan")))
+
+        fit_rms = quality.get("fit_rms")
+        if fit_rms is not None:
+            log.info("%s : ajustement du modele, ecart quadratique moyen %.4f "
+                     "(%.1f dB sous le signal)", label, fit_rms,
+                     quality.get("fit_rms_db", float("nan")))
+
+        if quality.get("fit_warning"):
+            self.add_warning(f"{label} : {quality['fit_warning']}")
 
         measured_over = quality.get("measured_over_unit", 0)
         if measured_over:
@@ -984,7 +994,7 @@ class AFRWizardComplete(tk.Tk):
 
         both_from_thrus = len(thru_keys) >= 2 and key_a is None and key_b is None
 
-        sources = {
+        info["sources"] = {
             "reflect_both_sides": (
                 f"{thru_keys[0]} pour l'entree et {thru_keys[1]} pour la sortie"
                 if both_from_thrus else
@@ -995,10 +1005,10 @@ class AFRWizardComplete(tk.Tk):
             "thru_symmetric_split": "2x-thru seul (moities supposees identiques)",
             "reflect_in_mirrored": f"{key_a} seul (sortie supposee identique)",
             "reflect_out_mirrored": f"{key_b} seul (entree supposee identique)",
-        }
+        }.get(info["method"], info["method"])
 
-        log.info("Fixtures assembles : %s", sources.get(info["method"], info["method"]))
-        self.status.set(f"Fixtures: {sources.get(info['method'], info['method'])}")
+        log.info("Fixtures assembles : %s", info["sources"])
+        self.refresh_fixture_source_text()
 
         if info.get("warning"):
             self.add_warning(info["warning"])
@@ -1014,6 +1024,14 @@ class AFRWizardComplete(tk.Tk):
                 )
 
         self.check_fixtured_dut_if_available()
+
+    @staticmethod
+    def assembly_label(info):
+        """Phrase decrivant la voie d'assemblage retenue."""
+
+        if not info:
+            return "aucun fixture calcule"
+        return info.get("sources", info.get("method", "inconnue"))
 
     def check_fixtured_dut_if_available(self):
         """Controle optionnel sur la mesure du DUT monte entre les deux lignes."""
@@ -1112,7 +1130,9 @@ class AFRWizardComplete(tk.Tk):
                 info = self.extracted_info.get(key)
 
                 if info and "z" in info:
-                    self.set_result_row(f"Fixture {side}", info["z"], info["delay"], key)
+                    fit = info.get("quality", {}).get("fit_rms")
+                    source = key if fit is None else f"{key}, ajustement {fit:.3f}"
+                    self.set_result_row(f"Fixture {side}", info["z"], info["delay"], source)
                     break
 
         self.refresh_length_labels()
@@ -2124,8 +2144,9 @@ class AFRWizardComplete(tk.Tk):
 
             self.extraction_done = True
 
+            # Ne pas ecraser le message qui nomme la voie d'assemblage.
             self.status.set(
-                "Fixture characteristics calculated successfully."
+                f"Fixtures: {self.assembly_label(getattr(self, 'fixture_assembly', {}))}"
             )
 
             self.fixture_pairs.keys()
@@ -2195,33 +2216,218 @@ class AFRWizardComplete(tk.Tk):
         self.extracted_info[key] = dict(information)
 
     def _build_page4(self):
-        ttk.Label(self.page4,text="Select ports and channels to be corrected",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))
-        ports=ttk.LabelFrame(self.page4,text="Ports",style="Section.TLabelframe",padding=12); ports.pack(fill="x")
-        self.apply_a=tk.BooleanVar(value=True); self.apply_b=tk.BooleanVar(value=True)
-        self.vna_a=tk.IntVar(value=1); self.vna_b=tk.IntVar(value=2)
-        ttk.Checkbutton(ports,text="Apply Fixture A",variable=self.apply_a).grid(row=0,column=0,padx=5)
-        ttk.Label(ports,text="VNA Port").grid(row=0,column=1); ttk.Spinbox(ports,from_=1,to=32,width=5,textvariable=self.vna_a).grid(row=0,column=2)
-        ttk.Label(ports,text="Fixture A  |  DUT  |  Fixture B",foreground="#4f81bd",font=("Segoe UI",12,"bold")).grid(row=0,column=3,padx=45)
-        ttk.Checkbutton(ports,text="Apply Fixture B",variable=self.apply_b).grid(row=0,column=4,padx=5)
-        ttk.Label(ports,text="VNA Port").grid(row=0,column=5); ttk.Spinbox(ports,from_=1,to=32,width=5,textvariable=self.vna_b).grid(row=0,column=6)
-        box=ttk.LabelFrame(self.page4,text="Channels",style="Section.TLabelframe",padding=12); box.pack(fill="both",expand=True,pady=12)
-        self.channel_vars=[]
-        for i,t in enumerate(["Standard","Noise Figure","Standard","Swept IMD","Gain Compression","Standard"],1):
-            v=tk.BooleanVar(); self.channel_vars.append(v); ttk.Checkbutton(box,text=f"Channel {i}   {t}",variable=v).pack(anchor="w",pady=2)
-        self.correction_method=tk.StringVar(value="enable_deembedding")
-        ttk.Radiobutton(box,text="Turn on fixturing/de-embedding for channels",value="enable_deembedding",variable=self.correction_method).pack(anchor="w",pady=(12,2))
-        ttk.Radiobutton(box,text="Modify the calset(s) used on channels",value="modify_calset",variable=self.correction_method).pack(anchor="w")
-        self.extrapolate=tk.BooleanVar(); self.compensate_power=tk.BooleanVar()
-        ttk.Checkbutton(box,text="Enable Extrapolation",variable=self.extrapolate).pack(anchor="w",pady=(10,0))
-        ttk.Checkbutton(box,text="Compensate for power",variable=self.compensate_power).pack(anchor="w")
-        a=ttk.Frame(self.page4); a.pack(fill="x")
-        ttk.Button(a,text="Apply Correction",command=self.apply_correction).pack(side="left",fill="x",expand=True,padx=(0,5))
-        ttk.Button(a,text="Undo Correction",command=lambda:self.status.set("Correction undone")).pack(side="left",fill="x",expand=True,padx=(5,0))
+        """Page 4 : retrait des fixtures autour d'une mesure brute."""
+
+        ttk.Label(
+            self.page4,
+            text="Remove Fixture from a raw measurement",
+            style="PageTitle.TLabel",
+        ).pack(anchor="w", pady=(0, 10))
+
+        ttk.Label(
+            self.page4,
+            text="Raw measurement = Fixture A  +  DUT  +  Fixture B, measured as one 2-port file.",
+            foreground="#4f81bd",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 8))
+
+        # --- fichier de mesure brute
+        source = ttk.LabelFrame(self.page4, text="Raw measurement",
+                                style="Section.TLabelframe", padding=12)
+        source.pack(fill="x")
+
+        self.raw_dut_file = tk.StringVar()
+        ttk.Label(source, text="Measured file (.s2p):").grid(row=0, column=0, sticky="w")
+        ttk.Entry(source, textvariable=self.raw_dut_file).grid(row=0, column=1, sticky="ew", padx=5)
+        ttk.Button(source, text="Browse...", command=self.choose_raw_dut).grid(row=0, column=2)
+        source.columnconfigure(1, weight=1)
+
+        # --- fixtures a retirer
+        fixtures = ttk.LabelFrame(self.page4, text="Fixtures to remove",
+                                  style="Section.TLabelframe", padding=12)
+        fixtures.pack(fill="x", pady=10)
+
+        self.apply_a = tk.BooleanVar(value=True)
+        self.apply_b = tk.BooleanVar(value=True)
+
+        ttk.Checkbutton(fixtures, text="Remove Fixture A (input side)",
+                        variable=self.apply_a).grid(row=0, column=0, sticky="w", padx=5)
+        ttk.Checkbutton(fixtures, text="Remove Fixture B (output side)",
+                        variable=self.apply_b).grid(row=0, column=1, sticky="w", padx=25)
+
+        self.fixture_source_text = tk.StringVar(
+            value="No fixture yet. Calculate the standards on page 3 first."
+        )
+        ttk.Label(fixtures, textvariable=self.fixture_source_text,
+                  wraplength=900).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        # --- action
+        actions = ttk.Frame(self.page4)
+        actions.pack(fill="x")
+        ttk.Button(actions, text="Remove Fixture and save",
+                   command=self.apply_correction).pack(side="left", padx=(0, 5))
+        ttk.Button(actions, text="Plot before / after",
+                   command=self.open_plot_window).pack(side="left", padx=5)
+
+        # --- compte rendu
+        report = ttk.LabelFrame(self.page4, text="Result",
+                                style="Section.TLabelframe", padding=12)
+        report.pack(fill="both", expand=True, pady=10)
+
+        self.deembed_report = tk.Text(report, height=14, state="disabled", wrap="word")
+        self.deembed_report.pack(fill="both", expand=True)
+
+    def choose_raw_dut(self):
+        filename = filedialog.askopenfilename(
+            title="Raw measurement (Fixture A + DUT + Fixture B)",
+            filetypes=[("Touchstone 2-port", "*.s2p"), ("All files", "*.*")],
+        )
+        if filename:
+            self.raw_dut_file.set(filename)
+
+    def refresh_fixture_source_text(self):
+        """Rappelle d'ou viennent les fixtures et avec quelle hypothese."""
+
+        if not hasattr(self, "fixture_source_text"):
+            return
+
+        info = getattr(self, "fixture_assembly", {}) or {}
+        method = info.get("method")
+
+        if method is None:
+            self.fixture_source_text.set(
+                "No fixture yet. Calculate the standards on page 3 first."
+            )
+            return
+
+        lines = [f"Fixtures from: {self.assembly_label(info)}"]
+
+        residual = info.get("residual")
+        if residual:
+            lines.append(
+                f"Check against the measured 2x-thru: S21 {residual['thru_s21_db']:.3f} dB, "
+                f"{residual['thru_s21_deg']:.2f} deg."
+            )
+
+        if info.get("warning"):
+            lines.append("Warning: " + info["warning"])
+
+        self.fixture_source_text.set("  ".join(lines))
+
+    def write_report(self, lines):
+        self.deembed_report.config(state="normal")
+        self.deembed_report.delete("1.0", "end")
+        self.deembed_report.insert("end", "\n".join(lines) + "\n")
+        self.deembed_report.config(state="disabled")
 
     def apply_correction(self):
-        selected=[i+1 for i,v in enumerate(self.channel_vars) if v.get()]
-        if not selected: messagebox.showwarning("No channel","Select at least one channel."); return
-        messagebox.showinfo("Correction",f"Channels selected: {selected}\nConnect this command to the VNA/de-embedding backend.")
+        """
+        Retire les fixtures d'une mesure brute ligne A + DUT + ligne B.
+
+            DUT = fixture_A^-1  **  mesure  **  fixture_B^-1
+
+        Le fichier corrige est ecrit a cote du fichier source et le resultat
+        devient tracable sous le nom DUT_DEEMBEDDED.
+        """
+
+        path = self.raw_dut_file.get().strip()
+
+        if not path:
+            messagebox.showwarning(
+                "No measurement",
+                "Select the raw measurement file (Fixture A + DUT + Fixture B).",
+            )
+            return
+
+        fixture_in = self.fixture_a_network if self.apply_a.get() else None
+        fixture_out = self.fixture_b_network if self.apply_b.get() else None
+
+        if fixture_in is None and fixture_out is None:
+            messagebox.showwarning(
+                "No fixture",
+                "Calculate the fixture characteristics on page 3, then select at "
+                "least one side to remove.",
+            )
+            return
+
+        try:
+            measured = afr_io.load_network(path, expected_ports=2)
+            measured.name = Path(path).stem
+
+            dut = afr_deembed.remove_fixtures(measured, fixture_in, fixture_out)
+
+            output = afr_io.write_network(
+                dut,
+                Path(self.rf_output_dir.get()) / f"{Path(path).stem}_DEEMBEDDED",
+                self.export_format.get(),
+            )
+        except Exception as error:
+            log.exception("De-embedding impossible")
+            messagebox.showerror("De-embedding error", str(error))
+            return
+
+        self.deembedded_network = dut
+        self.half_networks["RAW_MEASURED"] = measured
+        self.half_networks["DUT_DEEMBEDDED"] = dut
+
+        quality = afr_metrics.quality_report(dut.s)
+        rebuilt = afr_deembed.embed_fixtures(
+            dut,
+            fixture_in if fixture_in is not None else self.identity_network(measured),
+            fixture_out if fixture_out is not None else self.identity_network(measured),
+        )
+        reconstruction = float(np.max(np.abs(rebuilt.s - measured.s)))
+
+        band = measured.f >= measured.f[0]
+        gain = 20 * np.log10(np.maximum(np.abs(dut.s[band, 1, 0]), 1e-15)) - \
+            20 * np.log10(np.maximum(np.abs(measured.s[band, 1, 0]), 1e-15))
+
+        lines = [
+            f"Source        : {path}",
+            f"Band          : {measured.f[0] / 1e9:.3f} - {measured.f[-1] / 1e9:.3f} GHz, "
+            f"{len(measured.f)} points",
+            f"Fixtures      : {self.assembly_label(getattr(self, 'fixture_assembly', {}) or {})}",
+            f"Removed       : "
+            f"{'input' if fixture_in is not None else '-'} / "
+            f"{'output' if fixture_out is not None else '-'}",
+            "",
+            f"Insertion loss recovered : {np.mean(gain):+.2f} dB on average, "
+            f"{np.max(gain):+.2f} dB at most",
+            f"De-embedded DUT passive  : {quality['passive']} "
+            f"(max singular value {quality['max_singular_value']:.4f})",
+            f"Reciprocity error        : {quality['reciprocity_error']:.2e}",
+            f"Re-embedding residual    : {reconstruction:.2e}  "
+            f"(should be numerical noise)",
+            "",
+            f"Saved to : {output}",
+        ]
+
+        if not quality["passive"]:
+            lines.append("")
+            lines.append(
+                "WARNING: the de-embedded DUT is not passive. The fixtures are "
+                "over-estimated: too much loss has been removed. Check the "
+                "extraction quality on page 3 before using this file."
+            )
+            self.add_warning("DUT de-embedde non passif : fixtures surestimes.")
+
+        self.write_report(lines)
+        self.status.set(f"De-embedded: {output.name}")
+
+        if self.plot_window is not None:
+            try:
+                self.plot_window.refresh_sources()
+            except tk.TclError:
+                pass
+
+    @staticmethod
+    def identity_network(reference):
+        """Reseau 2 ports transparent, sur la grille de ``reference``."""
+
+        s = np.zeros((len(reference.f), 2, 2), dtype=complex)
+        s[:, 1, 0] = 1.0
+        s[:, 0, 1] = 1.0
+        return rf.Network(frequency=reference.frequency, s=s, z0=reference.z0)
 
     def _build_page5(self):
         ttk.Label(self.page5,text="Save Fixture",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))

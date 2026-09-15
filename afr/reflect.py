@@ -221,6 +221,68 @@ def _gate_echo(fu, x, t_far: float, td_ref: sig.TimeDomain, half_fraction: float
 
 
 # ---------------------------------------------------------------------------
+# Qualite d'ajustement : le fixture extrait explique-t-il la mesure ?
+# ---------------------------------------------------------------------------
+
+FIT_WARNING_LEVEL = 0.05
+
+
+def predict_reflect(network: rf.Network, gl: float) -> np.ndarray:
+    """
+    Reflexion que produirait le fixture extrait, termine par le standard GL :
+
+        Gamma = S11 + S21 S12 GL / (1 - S22 GL)
+    """
+
+    s11 = network.s[:, 0, 0]
+    s21 = network.s[:, 1, 0]
+    s12 = network.s[:, 0, 1]
+    s22 = network.s[:, 1, 1]
+
+    return s11 + s21 * s12 * gl / _safe(1.0 - s22 * gl)
+
+
+def model_fit(gamma_measured, network: rf.Network, gl: float) -> dict:
+    """
+    Compare la mesure a ce que predit le fixture extrait.
+
+    C'est l'indicateur de confiance : le modele suppose une seule
+    discontinuite dominante suivie d'une ligne uniforme. Sur un fixture reel
+    qui en compte plusieurs (connecteur, transition, via), l'ecart grandit et
+    l'extraction n'est plus fiable. Un ecart quadratique moyen inferieur a
+    quelques pourcents indique un modele adapte.
+
+    Retourne ``fit_rms``, ``fit_max`` (module de l'ecart, lineaire) et
+    ``fit_rms_db`` (ecart rapporte au niveau moyen de la mesure).
+    """
+
+    measured = np.asarray(gamma_measured, dtype=complex)
+    predicted = predict_reflect(network, gl)
+
+    error = predicted - measured
+    rms = float(np.sqrt(np.mean(np.abs(error) ** 2)))
+    level = float(np.sqrt(np.mean(np.abs(measured) ** 2)))
+
+    report = {
+        "fit_rms": rms,
+        "fit_max": float(np.max(np.abs(error))),
+        "fit_rms_db": float(20 * np.log10(max(rms, 1e-15) / max(level, 1e-15))),
+    }
+
+    if rms > FIT_WARNING_LEVEL:
+        report["fit_warning"] = (
+            f"Le fixture extrait ne reproduit la mesure qu'a {rms:.3f} pres "
+            f"(ecart quadratique moyen, {report['fit_rms_db']:.1f} dB sous le "
+            f"niveau du signal). Le modele a une discontinuite decrit mal ce "
+            f"fixture : plusieurs discontinuites fortes, standard imparfait ou "
+            f"bande insuffisante. Preferer le 2x-thru si vous en avez un."
+        )
+        log.warning(report["fit_warning"])
+
+    return report
+
+
+# ---------------------------------------------------------------------------
 # Assemblage du resultat
 # ---------------------------------------------------------------------------
 
@@ -357,8 +419,11 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
     method = ("reflect_short" if gl < 0 else "reflect_open") + (
         "" if model == "single_discontinuity" else "_first_order")
 
-    return _finish(f, fu, s11u, s21u, gamma, z0, method, quality, interp_method,
-                   smooth_points, enforce_passivity, g1=g1)
+    result = _finish(f, fu, s11u, s21u, gamma, z0, method, quality, interp_method,
+                     smooth_points, enforce_passivity, g1=g1)
+
+    result.quality.update(model_fit(gamma, result.network, gl))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -418,9 +483,15 @@ def fixture_from_open_short(f, gamma_open, gamma_short, z0: float = 50.0,
 
     _open_short_consistency(f, gamma_open, gamma_short, z0, interp_method, quality)
 
-    return _finish(f, fu, s11u, s21u, 0.5 * (gamma_open + gamma_short), z0,
-                   "reflect_open_short", quality, interp_method,
-                   smooth_points, enforce_passivity, g1=g1)
+    result = _finish(f, fu, s11u, s21u, 0.5 * (gamma_open + gamma_short), z0,
+                     "reflect_open_short", quality, interp_method,
+                     smooth_points, enforce_passivity, g1=g1)
+
+    # Le modele doit expliquer les DEUX mesures : on retient la pire des deux
+    fit_open = model_fit(gamma_open, result.network, +1.0)
+    fit_short = model_fit(gamma_short, result.network, -1.0)
+    result.quality.update(fit_open if fit_open["fit_rms"] >= fit_short["fit_rms"] else fit_short)
+    return result
 
 
 def _open_short_first_order(f, gamma_open, gamma_short, z0, interp_method,
@@ -449,8 +520,13 @@ def _open_short_first_order(f, gamma_open, gamma_short, z0, interp_method,
 
     _open_short_consistency(f, gamma_open, gamma_short, z0, interp_method, quality)
 
-    return _finish(f, fu, s11u, s21u, mean, z0, "reflect_open_short_first_order",
-                   quality, interp_method, smooth_points, enforce_passivity, g1=s11u)
+    result = _finish(f, fu, s11u, s21u, mean, z0, "reflect_open_short_first_order",
+                     quality, interp_method, smooth_points, enforce_passivity, g1=s11u)
+
+    fit_open = model_fit(gamma_open, result.network, +1.0)
+    fit_short = model_fit(gamma_short, result.network, -1.0)
+    result.quality.update(fit_open if fit_open["fit_rms"] >= fit_short["fit_rms"] else fit_short)
+    return result
 
 
 def _open_short_consistency(f, gamma_open, gamma_short, z0, interp_method, quality):
@@ -461,6 +537,7 @@ def _open_short_consistency(f, gamma_open, gamma_short, z0, interp_method, quali
                                       enforce_passivity=False)
         r_short = fixture_from_reflect(f, gamma_short, "SHORT", z0, interp_method,
                                        enforce_passivity=False)
+
         so = r_open.network.s[:, 1, 0]
         ss = r_short.network.s[:, 1, 0]
 

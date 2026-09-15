@@ -59,6 +59,47 @@ resolu algebriquement, sans aucun fenetrage : c'est la methode la plus precise.
 L'ancienne formule du premier ordre reste disponible en page 3 (bouton
 « First order ») pour comparaison.
 
+## Retirer les fixtures d'une mesure brute (page 4)
+
+La page 4 corrige une mesure brute `ligne A + DUT + ligne B` :
+
+1. calculer les fixtures en page 3 (OPEN et/ou SHORT, 2x-thru) ;
+2. page 4, choisir le fichier `.s2p` de la mesure brute ;
+3. cocher les cotes a retirer, puis « Remove Fixture and save ».
+
+Le calcul applique `DUT = fixture_A^-1 ** mesure ** fixture_B^-1`. Le compte
+rendu affiche la voie d'assemblage retenue, la perte d'insertion recuperee,
+la passivite du DUT corrige et le residu de remise en cascade, qui doit
+rester au niveau du bruit numerique. Le fichier corrige est ecrit dans le
+dossier de sortie et devient tracable sous le nom `DUT_DEEMBEDDED`.
+
+Un DUT corrige **non passif** signale des fixtures surestimes : trop de
+pertes ont ete retirees. Dans ce cas, verifier d'abord l'indicateur
+d'ajustement en page 3.
+
+## Indicateur de confiance : l'ajustement du modele
+
+Apres extraction, l'outil reconstruit la mesure 1 port a partir du fixture
+obtenu et la compare a la mesure reelle. L'ecart quadratique moyen
+(`fit_rms`) dit si le modele a une discontinuite convient a votre fixture :
+
+| Valeur | Lecture |
+|---|---|
+| < 0.02 | le modele decrit bien le fixture, extraction fiable |
+| 0.02 a 0.05 | acceptable, verifier le resultat |
+| > 0.05 | avertissement : plusieurs discontinuites fortes, standard imparfait ou bande insuffisante. Preferer le 2x-thru |
+
+La valeur est affichee a cote de Z et du TTD, et journalisee avec son niveau
+relatif en dB.
+
+## Vue temporelle (fenetre de trace)
+
+Le format « Time domain: impulse + step (TDR) » montre la reponse
+impulsionnelle avec les deux fenetres en surimpression, et le profil
+d'impedance quand le continu est present. C'est le moyen direct de voir si
+les deux reflexions sont separables : si la zone verte (fenetre proche)
+deborde sur la zone orange (fenetre lointaine), un titre rouge le signale.
+
 ## Standards de reflexion : OPEN, SHORT, ou les deux
 
 OPEN et SHORT s'utilisent independamment. Le choix se fait en page 3 :

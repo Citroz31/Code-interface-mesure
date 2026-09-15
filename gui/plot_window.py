@@ -17,6 +17,9 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
+from afr import reflect as afr_reflect
+from afr import signal as afr_signal
+
 log = logging.getLogger("afr.gui.plot")
 
 PARAMETERS = ("S11", "S12", "S21", "S22")
@@ -26,7 +29,11 @@ FORMATS = (
     ("db_delay", "Amplitude (dB) + Group delay (ps)"),
     ("mag_phase", "Magnitude + Phase (rad)"),
     ("real_imag", "Real + Imaginary"),
+    ("time", "Time domain: impulse + step (TDR)"),
 )
+
+# Format temporel : l'axe des abscisses devient le temps, pas la frequence.
+TIME_FORMAT = "time"
 
 
 class PlotWindow(tk.Toplevel):
@@ -192,6 +199,131 @@ class PlotWindow(tk.Toplevel):
             return magnitude, phase, "Magnitude", "Phase (rad)"
         return np.real(s), np.imag(s), "Real", "Imaginary"
 
+    # ------------------------------------------------------------------
+    # Domaine temporel
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _impulse_and_step(f, s):
+        """
+        Reponse impulsionnelle et reponse en echelon, avec le meme
+        traitement que l'extraction (grille uniforme, mode passe-bas ou
+        passe-bande selon la bande mesuree).
+
+        Retourne ``(t_ps, impulse, step_or_None, td)``. La reponse en
+        echelon n'a de sens qu'en presence du continu.
+        """
+
+        fu, td = afr_reflect.prepare(np.asarray(f, float), np.asarray(s, complex))
+
+        keep = td.t <= td.span / 2
+        t_ps = td.t[keep] * 1e12
+        impulse = np.abs(td.h[keep])
+
+        step = None
+        if td.mode == "lowpass":
+            order = np.argsort(td.t_sym, kind="stable")
+            cumulative = np.cumsum(np.real(td.h[order]))
+            t_sorted = td.t_sym[order]
+            positive = t_sorted >= 0.0
+            step = (t_sorted[positive] * 1e12, np.clip(cumulative[positive], -0.999, 0.999))
+
+        return t_ps, impulse, step, td
+
+    def _plot_time_domain(self, networks, parameters):
+        """Reponse temporelle : impulsion en haut, echelon (TDR) en bas."""
+
+        self.figure.clear()
+        top = self.figure.add_subplot(2, 1, 1)
+        bottom = self.figure.add_subplot(2, 1, 2, sharex=top)
+
+        drawn = 0
+        marked = False
+
+        for label, network in networks:
+            for name, i, j in parameters:
+                if i >= network.nports or j >= network.nports:
+                    continue
+                try:
+                    t_ps, impulse, step, td = self._impulse_and_step(
+                        network.f, network.s[:, i, j]
+                    )
+                except Exception as error:
+                    log.warning("Domaine temporel impossible pour %s %s : %s",
+                                label, name, error)
+                    continue
+
+                top.plot(t_ps, impulse, lw=1.2, label=f"{label} {name}")
+
+                if step is not None:
+                    t_step, rho = step
+                    z = 50.0 * (1.0 + rho) / (1.0 - rho)
+                    bottom.plot(t_step, z, lw=1.2, label=f"{label} {name}")
+
+                # Reperes des fenetres, sur la premiere courbe seulement
+                if not marked and i == j == 0:
+                    marked = self._mark_gates(top, td)
+
+                drawn += 1
+
+        if drawn == 0:
+            self._message("Nothing to draw in the time domain.")
+            return
+
+        top.set_ylabel("Impulse response |h(t)|")
+        top.set_xlabel("")
+        bottom.set_ylabel("TDR impedance (Ohm)")
+        bottom.set_xlabel("Time (ps)")
+
+        if not bottom.lines:
+            bottom.text(0.5, 0.5,
+                        "No DC in the measured band:\nthe step response is not defined.",
+                        ha="center", va="center", transform=bottom.transAxes)
+            bottom.set_axis_off()
+
+        for axis in (top, bottom):
+            if axis.lines:
+                axis.grid(True, alpha=0.4)
+                if axis.get_legend_handles_labels()[0]:
+                    axis.legend(fontsize=8)
+
+        try:
+            self.figure.tight_layout()
+        except Exception:
+            pass
+        self.canvas.draw_idle()
+
+    @staticmethod
+    def _mark_gates(axis, td):
+        """
+        Trace les bornes des fenetres proche et lointaine. C'est ce qui rend
+        visible un recouvrement : si la borne de la fenetre proche depasse le
+        debut de la fenetre lointaine, les deux reflexions ne sont pas
+        separables avec cette bande de mesure.
+        """
+
+        try:
+            t_far = afr_signal.find_peak(td)
+            _, _, quality = afr_reflect._gates(td, t_far)
+        except Exception:
+            return False
+
+        near = quality["near_split_ps"]
+        start = quality["gate_center_ps"] - quality["gate_half_ps"]
+        stop = quality["gate_center_ps"] + quality["gate_half_ps"]
+
+        axis.axvspan(0, near, color="tab:green", alpha=0.12,
+                     label=f"near gate (0 - {near:.0f} ps)")
+        axis.axvspan(start, stop, color="tab:orange", alpha=0.12,
+                     label=f"far gate ({start:.0f} - {stop:.0f} ps)")
+
+        if near > start:
+            axis.set_title(f"Gates overlap: near ends at {near:.0f} ps, "
+                           f"far starts at {start:.0f} ps", color="tab:red", fontsize=9)
+        return True
+
+    # ------------------------------------------------------------------
+
     def update_plot(self):
         networks = self.selected_networks()
         parameters = self.selected_parameters()
@@ -204,6 +336,11 @@ class PlotWindow(tk.Toplevel):
             return
 
         fmt = self.format_var.get()
+
+        if fmt == TIME_FORMAT:
+            self._plot_time_domain(networks, parameters)
+            return
+
         self.figure.clear()
 
         columns = len(parameters)
