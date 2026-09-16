@@ -16,6 +16,8 @@ from afr import reflect as afr_reflect
 from afr import signal as afr_signal
 from afr import thru as afr_thru
 from gui.plot_window import PlotWindow
+from gui.scrollable import (ReflowBar, ResponsiveColumns, ScrollableFrame,
+                            wrap_label)
 
 log = logging.getLogger("afr.gui")
 
@@ -304,7 +306,9 @@ class AFRWizardComplete(tk.Tk):
         self.configure(background=APP_BG)
         self.title("Automatic Fixture Removal - AFR Pages 1 and 2")
         self.geometry("1180x760")
-        self.minsize(1040, 700)
+        # Taille minimale volontairement basse : au-dela, le contenu defile
+        # au lieu d'etre coupe (voir gui/scrollable.py).
+        self.minsize(560, 420)
         self.config_data = AFRConfiguration()
         self.current_page = 0
         # ============================================================
@@ -404,9 +408,15 @@ class AFRWizardComplete(tk.Tk):
         self.container.rowconfigure(0, weight=1)
         self.container.columnconfigure(0, weight=1)
 
-        self.pages = [ttk.Frame(self.container) for _ in range(6)]
-        for page in self.pages:
-            page.grid(row=0, column=0, sticky="nsew")
+        # Chaque page est une zone defilante : quand la fenetre retrecit, le
+        # contenu reste atteignable au lieu d'etre tronque.
+        self.page_frames = [
+            ScrollableFrame(self.container, background=APP_BG) for _ in range(6)
+        ]
+        for frame in self.page_frames:
+            frame.grid(row=0, column=0, sticky="nsew")
+
+        self.pages = [frame.interior for frame in self.page_frames]
         self.page1, self.page2, self.page3, self.page4, self.page5, self.page6 = self.pages
         self._build_page1()
         self._build_page2()
@@ -547,29 +557,44 @@ class AFRWizardComplete(tk.Tk):
         )
 
     def _header(self):
-        bar = ttk.Frame(self, padding=(8, 6))
+        bar = ReflowBar(self, spacing=3, padding=(8, 6))
         bar.pack(fill="x")
+
         titles = ["1. Describe Fixture", "2. Specify Standards", "3. Measure Standards",
                   "4. Remove Fixture", "5. Save Fixture", "6. Batch Process"]
-        self.tab_buttons = []
-        for i, title in enumerate(titles):
-            b = ttk.Button(bar, text=title, command=lambda n=i: self.request_page(n))
-            b.pack(side="left", padx=2)
-            self.tab_buttons.append(b)
+
+        self.tab_buttons = [
+            bar.add(ttk.Button(bar, text=title, command=lambda n=index: self.request_page(n)))
+            for index, title in enumerate(titles)
+        ]
+
         ttk.Separator(self).pack(fill="x")
 
     def _footer(self):
         ttk.Separator(self).pack(fill="x")
-        foot = ttk.Frame(self, padding=10)
+
+        foot = ttk.Frame(self, padding=8)
         foot.pack(fill="x")
-        ttk.Button(foot, text="User Preset...", command=self.show_configuration).pack(side="left")
+
+        # Colonne 1 (le statut) absorbe la place restante ; les boutons
+        # gardent leur largeur et ne sortent jamais de la fenetre.
+        foot.columnconfigure(1, weight=1)
+
+        ttk.Button(foot, text="User Preset...",
+                   command=self.show_configuration).grid(row=0, column=0, sticky="w")
+
         self.status = tk.StringVar(value="Ready")
-        ttk.Label(foot, textvariable=self.status).pack(side="left", padx=15)
-        ttk.Button(foot, text="Exit", command=self.destroy).pack(side="right", padx=5)
-        self.next_btn = ttk.Button(foot, text="Next", command=self.next_page)
-        self.next_btn.pack(side="right", padx=5)
+        status_label = ttk.Label(foot, textvariable=self.status, anchor="w")
+        status_label.grid(row=0, column=1, sticky="ew", padx=10)
+        wrap_label(status_label, margin=340)
+
         self.back_btn = ttk.Button(foot, text="Back", command=self.previous_page)
-        self.back_btn.pack(side="right", padx=5)
+        self.back_btn.grid(row=0, column=2, padx=3)
+
+        self.next_btn = ttk.Button(foot, text="Next", command=self.next_page)
+        self.next_btn.grid(row=0, column=3, padx=3)
+
+        ttk.Button(foot, text="Exit", command=self.destroy).grid(row=0, column=4, padx=3)
 
     # ======================================================================
     # Pont vers le noyau de calcul (paquet afr/)
@@ -1193,14 +1218,18 @@ class AFRWizardComplete(tk.Tk):
         self.status.set(f"Batch finished: {len(items) - failed} file(s) de-embedded.")
 
     def _build_page1(self):
-        ttk.Label(self.page1, text="This 6 step wizard characterizes and removes the fixture effects from your measurements",
-                  style="PageTitle.TLabel").pack(anchor="w", pady=(0, 10))
-        body = ttk.Frame(self.page1)
+        wrap_label(
+            ttk.Label(self.page1,
+                      text="This 6 step wizard characterizes and removes the fixture "
+                           "effects from your measurements",
+                      style="PageTitle.TLabel", wraplength=700)
+        ).pack(anchor="w", fill="x", pady=(0, 10))
+        # Deux colonnes cote a cote, empilees automatiquement si la fenetre
+        # devient trop etroite pour les afficher l'une a cote de l'autre.
+        body = ResponsiveColumns(self.page1, threshold=780, gap=18)
         body.pack(fill="both", expand=True)
-        left = ttk.Frame(body)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 20))
-        right = ttk.Frame(body)
-        right.pack(side="right", fill="both", expand=True)
+        left = body.add_column()
+        right = body.add_column()
 
         fixture_box = ttk.LabelFrame(left, text="My fixture inputs are", style="Section.TLabelframe", padding=10)
         fixture_box.pack(fill="x", pady=4)
@@ -1333,8 +1362,10 @@ class AFRWizardComplete(tk.Tk):
                         variable=self.thru_mode,command=self._store_page2).pack(anchor="w", pady=3)
 
         self.rule_summary = tk.StringVar()
-        ttk.Label(self.page2, textvariable=self.rule_summary, foreground="#364f6b",
-                  font=("Segoe UI", 10, "bold"), wraplength=1050).pack(anchor="w", pady=5)
+        wrap_label(
+            ttk.Label(self.page2, textvariable=self.rule_summary, foreground="#364f6b",
+                      font=("Segoe UI", 10, "bold"), wraplength=600)
+        ).pack(anchor="w", fill="x", pady=5)
 
     def on_second_2x_thru_changed(self):
         """
@@ -1998,9 +2029,12 @@ class AFRWizardComplete(tk.Tk):
         rows=self._selected_standard_rows()
         if not rows: ttk.Label(self.files_box,text="No standard selected on page 2.").pack(anchor="w"); return
         for i,(key,label) in enumerate(rows):
-            ttk.Label(self.files_box,text=label,width=20).grid(row=i,column=0,sticky="w",pady=4)
-            var=self.standard_file_vars.setdefault(key,tk.StringVar())
-            ttk.Entry(self.files_box,textvariable=var,width=75).grid(row=i,column=1,sticky="ew",padx=5)
+            ttk.Label(self.files_box, text=label, width=18).grid(row=i, column=0, sticky="w", pady=4)
+            var = self.standard_file_vars.setdefault(key, tk.StringVar())
+            # width volontairement petit : la colonne s'etire via sticky="ew"
+            # et le poids ci-dessous, et la fenetre peut donc retrecir.
+            ttk.Entry(self.files_box, textvariable=var, width=20).grid(
+                row=i, column=1, sticky="ew", padx=5)
             ttk.Button(self.files_box,text="Load...",command=lambda k=key:self.load_standard(k)).grid(row=i,column=2,padx=3)
             ttk.Button(self.files_box,text="Measure",command=lambda k=key:self.measure_standard(k)).grid(row=i,column=3,padx=3)
         self.files_box.columnconfigure(1,weight=1)
@@ -2258,8 +2292,10 @@ class AFRWizardComplete(tk.Tk):
         self.fixture_source_text = tk.StringVar(
             value="No fixture yet. Calculate the standards on page 3 first."
         )
-        ttk.Label(fixtures, textvariable=self.fixture_source_text,
-                  wraplength=900).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        wrap_label(
+            ttk.Label(fixtures, textvariable=self.fixture_source_text, wraplength=600)
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        fixtures.columnconfigure(1, weight=1)
 
         # --- action
         actions = ttk.Frame(self.page4)
@@ -2519,7 +2555,7 @@ class AFRWizardComplete(tk.Tk):
 
     def _build_page6(self):
         ttk.Label(self.page6,text="Batch Process",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))
-        ttk.Label(self.page6,text="Initial batch structure. The detailed Batch Process screenshot was not supplied.",wraplength=900).pack(anchor="w")
+        wrap_label(ttk.Label(self.page6, text="Batch: de-embed every measurement of a folder with the fixtures calculated on page 3.", wraplength=600)).pack(anchor="w", fill="x")
         b=ttk.LabelFrame(self.page6,text="Batch configuration",style="Section.TLabelframe",padding=12); b.pack(fill="x",pady=12)
         self.batch_in=tk.StringVar(); self.batch_out=tk.StringVar(); self.batch_pattern=tk.StringVar(value="*.s2p")
         for row,(label,var) in enumerate([("Input directory:",self.batch_in),("Output directory:",self.batch_out)]):
@@ -2592,7 +2628,7 @@ class AFRWizardComplete(tk.Tk):
 
             self._refresh_page3_rows()
 
-        self.pages[page_index].tkraise()
+        self.page_frames[page_index].tkraise()
         self.current_page = page_index
 
         self.back_btn.configure(

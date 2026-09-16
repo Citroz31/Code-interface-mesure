@@ -59,6 +59,23 @@ resolu algebriquement, sans aucun fenetrage : c'est la methode la plus precise.
 L'ancienne formule du premier ordre reste disponible en page 3 (bouton
 « First order ») pour comparaison.
 
+## Interface adaptative
+
+La fenetre suit la taille que vous lui donnez, sans que rien ne disparaisse :
+
+- **chaque page defile** (`gui/scrollable.py`, `ScrollableFrame`) : les barres
+  verticale et horizontale n'apparaissent que si le contenu deborde, et la
+  molette agit sur la page sous le pointeur ;
+- **la barre d'onglets se replie** : les six onglets passent sur deux ou trois
+  lignes au lieu de sortir de l'ecran ;
+- **la page 1 empile ses deux colonnes** en dessous de 780 pixels de large ;
+- **les textes longs se replient** au lieu d'elargir la fenetre ;
+- **le pied de page** garde Back, Next et Exit visibles, le message d'etat
+  absorbant la place restante.
+
+La taille minimale est passee de 1040 x 700 a 560 x 420 : en dessous, tout
+reste atteignable par defilement.
+
 ## Retirer les fixtures d'une mesure brute (page 4)
 
 La page 4 corrige une mesure brute `ligne A + DUT + ligne B` :
