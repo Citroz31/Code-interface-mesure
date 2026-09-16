@@ -30,7 +30,11 @@ FORMATS = (
     ("mag_phase", "Magnitude + Phase (rad)"),
     ("real_imag", "Real + Imaginary"),
     ("time", "Time domain: impulse + step (TDR)"),
+    ("delta", "Difference vs the first selected source"),
 )
+
+# Format d'ecart : chaque courbe est rapportee a la premiere source cochee.
+DELTA_FORMAT = "delta"
 
 # Format temporel : l'axe des abscisses devient le temps, pas la frequence.
 TIME_FORMAT = "time"
@@ -157,6 +161,30 @@ class PlotWindow(tk.Toplevel):
             self.sources[label] = (var, network)
             text = f"{label}  [{network.nports}p, {len(network.f)} pts]"
             ttk.Checkbutton(self.source_frame, text=text, variable=var).pack(anchor="w")
+
+    def select_only(self, labels, parameters=None, plot_format=None):
+        """
+        Coche exactement les sources demandees et redessine.
+
+        Utilise par la page 4 pour ouvrir directement la comparaison avant /
+        apres de-embedding, sans avoir a retrouver les deux courbes dans la
+        liste. Les libelles absents sont ignores silencieusement.
+        """
+
+        self.refresh_sources()
+
+        wanted = set(labels)
+        for label, (var, _net) in self.sources.items():
+            var.set(label in wanted)
+
+        if parameters:
+            for name, var in self.param_vars.items():
+                var.set(name in parameters)
+
+        if plot_format:
+            self.format_var.set(plot_format)
+
+        self.update_plot()
 
     def _set_sources(self, state: bool):
         for var, _net in self.sources.values():
@@ -324,6 +352,76 @@ class PlotWindow(tk.Toplevel):
 
     # ------------------------------------------------------------------
 
+    def _plot_difference(self, networks, parameters):
+        """
+        Ecart de chaque source par rapport a la premiere cochee.
+
+        Sur une comparaison avant / apres de-embedding, la courbe donne
+        directement ce que les fixtures retiraient : gain d'insertion
+        recupere en haut, rotation de phase enlevee en bas.
+        """
+
+        if len(networks) < 2:
+            self._message("Select at least two sources:\nthe first one is the reference.")
+            return
+
+        reference_label, reference = networks[0]
+        f_ref = np.asarray(reference.f, dtype=float)
+        f_ghz = f_ref / 1e9
+
+        self.figure.clear()
+        columns = len(parameters)
+        axes_top, axes_bottom = [], []
+        for column in range(columns):
+            top = self.figure.add_subplot(2, columns, column + 1)
+            bottom = self.figure.add_subplot(2, columns, columns + column + 1, sharex=top)
+            axes_top.append(top)
+            axes_bottom.append(bottom)
+
+        drawn = 0
+        for label, network in networks[1:]:
+            f_other = np.asarray(network.f, dtype=float)
+
+            for column, (name, i, j) in enumerate(parameters):
+                if i >= network.nports or j >= reference.nports:
+                    continue
+
+                other = network.s[:, i, j]
+                if len(f_other) != len(f_ref) or not np.allclose(f_other, f_ref):
+                    other = (np.interp(f_ref, f_other, np.real(other))
+                             + 1j * np.interp(f_ref, f_other, np.imag(other)))
+
+                ratio = other / np.where(np.abs(reference.s[:, i, j]) < 1e-15,
+                                         1e-15, reference.s[:, i, j])
+
+                axes_top[column].plot(f_ghz, 20 * np.log10(np.maximum(np.abs(ratio), 1e-15)),
+                                      label=f"{label} - {reference_label}", linewidth=1.2)
+                axes_bottom[column].plot(f_ghz, np.degrees(np.unwrap(np.angle(ratio))),
+                                         label=f"{label} - {reference_label}", linewidth=1.2)
+                axes_top[column].set_title(name)
+                axes_top[column].set_ylabel("Difference (dB)")
+                axes_bottom[column].set_ylabel("Phase difference (deg)")
+                axes_bottom[column].set_xlabel("Frequency (GHz)")
+                drawn += 1
+
+        if drawn == 0:
+            self._message("Nothing to compare for the selected parameters.")
+            return
+
+        for axis in axes_top + axes_bottom:
+            axis.grid(True, alpha=0.4)
+            axis.axhline(0.0, color="0.4", linewidth=0.8)
+            if axis.get_legend_handles_labels()[0]:
+                axis.legend(fontsize=8)
+
+        self.figure.suptitle(f"Reference: {reference_label}", fontsize=9)
+
+        try:
+            self.figure.tight_layout()
+        except Exception:
+            pass
+        self.canvas.draw_idle()
+
     def update_plot(self):
         networks = self.selected_networks()
         parameters = self.selected_parameters()
@@ -339,6 +437,10 @@ class PlotWindow(tk.Toplevel):
 
         if fmt == TIME_FORMAT:
             self._plot_time_domain(networks, parameters)
+            return
+
+        if fmt == DELTA_FORMAT:
+            self._plot_difference(networks, parameters)
             return
 
         self.figure.clear()

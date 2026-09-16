@@ -109,6 +109,23 @@ Un DUT corrige **non passif** signale des fixtures surestimes : trop de
 pertes ont ete retirees. Dans ce cas, verifier d'abord l'indicateur
 d'ajustement en page 3.
 
+### Voir le DUT avec et sans de-embedding
+
+Deux boutons ouvrent directement la comparaison, sans avoir a retrouver les
+courbes dans la liste des sources :
+
+| Bouton | Ce qu'il montre |
+|---|---|
+| Plot before / after | la mesure brute et le DUT corrige superposes, S11 et S21 |
+| Plot what the fixtures added | l'ecart entre les deux : gain d'insertion recupere en haut, rotation de phase enlevee en bas |
+
+Les deux courbes restent disponibles dans la fenetre de trace sous les noms
+« DUT measured (fixtures included) » et « DUT de-embedded (fixtures removed) »,
+avec tous les formats habituels, domaine temporel compris.
+
+Le format « Difference vs the first selected source » est general : il compare
+n'importe quelles courbes cochees a la premiere d'entre elles.
+
 ## Indicateur de confiance : l'ajustement du modele
 
 Apres extraction, l'outil reconstruit la mesure 1 port a partir du fixture

@@ -2028,6 +2028,9 @@ class AFRWizardComplete(tk.Tk):
     # Fenetre de trace (gui/plot_window.py)
     # ======================================================================
 
+    RAW_LABEL = "DUT measured (fixtures included)"
+    DEEMBEDDED_LABEL = "DUT de-embedded (fixtures removed)"
+
     def open_plot_window(self):
         """Ouvre (ou ramene au premier plan) la fenetre de trace."""
 
@@ -2048,6 +2051,39 @@ class AFRWizardComplete(tk.Tk):
             on_close=self._plot_window_closed,
             background=APP_BG,
         )
+
+    def show_before_after(self, plot_format="db_phase"):
+        """
+        Ouvre la fenetre de trace sur la comparaison avant / apres
+        de-embedding : la mesure brute et le DUT corrige, deja coches.
+        """
+
+        if "DUT_DEEMBEDDED" not in self.half_networks:
+            messagebox.showinfo(
+                "Nothing to compare",
+                "Run 'Remove Fixture and save' first: the comparison needs both "
+                "the raw measurement and the de-embedded DUT.",
+            )
+            return
+
+        self.open_plot_window()
+
+        if self.plot_window is None:
+            return
+
+        try:
+            self.plot_window.select_only(
+                [self.RAW_LABEL, self.DEEMBEDDED_LABEL],
+                parameters=("S11", "S21"),
+                plot_format=plot_format,
+            )
+        except tk.TclError:
+            self.plot_window = None
+
+    def show_fixture_contribution(self):
+        """Ecart entre le DUT corrige et la mesure brute : ce que les lignes ajoutaient."""
+
+        self.show_before_after(plot_format="delta")
 
     def _plot_window_closed(self):
         self.plot_window = None
@@ -2072,8 +2108,16 @@ class AFRWizardComplete(tk.Tk):
             except Exception as error:
                 log.warning("Fichier %s illisible : %s", path, error)
 
+        special = {
+            "RAW_MEASURED": self.RAW_LABEL,
+            "DUT_DEEMBEDDED": self.DEEMBEDDED_LABEL,
+        }
+
         for key, network in self.half_networks.items():
             if network is None:
+                continue
+            if key in special:
+                items.append((special[key], network))
                 continue
             if key.endswith("_IN"):
                 label = f"{key[:-3]} fixture A (half IN)"
@@ -2365,12 +2409,14 @@ class AFRWizardComplete(tk.Tk):
         fixtures.columnconfigure(1, weight=1)
 
         # --- action
-        actions = ttk.Frame(self.page4)
+        actions = ReflowBar(self.page4, spacing=4)
         actions.pack(fill="x")
-        ttk.Button(actions, text="Remove Fixture and save",
-                   command=self.apply_correction).pack(side="left", padx=(0, 5))
-        ttk.Button(actions, text="Plot before / after",
-                   command=self.open_plot_window).pack(side="left", padx=5)
+        actions.add(ttk.Button(actions, text="Remove Fixture and save",
+                               command=self.apply_correction))
+        actions.add(ttk.Button(actions, text="Plot before / after",
+                               command=self.show_before_after))
+        actions.add(ttk.Button(actions, text="Plot what the fixtures added",
+                               command=self.show_fixture_contribution))
 
         # --- compte rendu
         report = ttk.LabelFrame(self.page4, text="Result",
@@ -2519,9 +2565,12 @@ class AFRWizardComplete(tk.Tk):
 
         if self.plot_window is not None:
             try:
-                self.plot_window.refresh_sources()
+                self.plot_window.select_only(
+                    [self.RAW_LABEL, self.DEEMBEDDED_LABEL],
+                    parameters=("S11", "S21"),
+                )
             except tk.TclError:
-                pass
+                self.plot_window = None
 
     @staticmethod
     def identity_network(reference):
