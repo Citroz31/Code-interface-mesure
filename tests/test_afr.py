@@ -224,6 +224,127 @@ def test_bandpass_mode_on_banded_measurement():
     assert abs(result.impedance_ohm - ZC) < 3.0
 
 
+# ---------------------------------------------------------------------------
+# reflect : deuxieme methode (modele de ligne ajuste)
+# ---------------------------------------------------------------------------
+
+def noisy(values, level_db=-40.0, seed=7):
+    """Bruit gaussien complexe de niveau ``level_db`` (reproductible)."""
+
+    rng = np.random.default_rng(seed)
+    sigma = 10.0 ** (level_db / 20.0) / np.sqrt(2.0)
+    return values + rng.normal(0.0, sigma, len(values)) + 1j * rng.normal(0.0, sigma, len(values))
+
+
+def test_fit_line_model_recovers_delay_and_losses():
+    """Les coefficients ajustes redonnent le P^2 dont ils sont issus."""
+
+    freq = np.arange(1e9, 50e9 + 1, 100e6)
+    root = np.sqrt(freq)
+    a, b, c, tau = 1.2e-6, 2.0e-14, 3.0e-7, 300e-12
+
+    p2 = (np.exp(-2 * (a * root + b * freq))
+          * np.exp(-1j * (2 * c * root + 4 * np.pi * freq * tau)))
+
+    coefficients = reflect.fit_line_model(freq, p2)
+
+    assert abs(coefficients["delay_s"] - tau) < 1e-14
+    assert abs(coefficients["alpha_root"] - 2 * a) < 1e-9
+    assert abs(coefficients["alpha_linear"] - 2 * b) < 1e-16
+
+    rebuilt = reflect.line_model_p_squared(freq, coefficients)
+    assert np.max(np.abs(rebuilt - p2)) < 1e-9
+
+    # La racine du modele est analytique : elle se recarre exactement.
+    propagation = reflect.line_model_propagation(freq, coefficients)
+    assert np.max(np.abs(propagation ** 2 - rebuilt)) < 1e-12
+
+
+def test_line_fit_matches_exact_model_without_noise(line):
+    """Sans bruit, les deux modeles doivent donner le meme fixture."""
+
+    result = reflect.fixture_from_reflect(FREQ, one_port(line, +1.0), "OPEN",
+                                          model="line_fit")
+
+    mag, phase = errors(result.network.s[:, 1, 0], line.s[:, 1, 0])
+    assert mag < 0.3, f"{mag:.3f} dB"
+    assert phase < 3.0
+    assert result.quality["model"] == "line_fit"
+    assert result.method == "reflect_open_line_fit"
+    assert abs(result.quality["line_fit_delay_ps"] - DELAY * 1e12) < 5.0
+
+
+def test_line_fit_beats_gating_in_the_thz_band():
+    """
+    WR-1.0 (750 GHz - 1.1 THz) avec un plancher de bruit a -40 dB : l'echo
+    aller-retour vaut environ -42 dB, donc a peine plus que le bruit. Le
+    fenetrage transporte ce bruit dans |S21| ; l'ajustement le moyenne.
+    """
+
+    freq = np.arange(750e9, 1100e9 + 1, 250e6)
+    thz_line = synthetic_line(freq=freq, delay=300e-12, loss_db_10ghz=2.0)
+    gamma = noisy(one_port(thz_line, +1.0))
+
+    band = (freq >= freq[0] + 0.05 * (freq[-1] - freq[0])) & \
+           (freq <= freq[-1] - 0.05 * (freq[-1] - freq[0]))
+    reference = thz_line.s[band, 1, 0]
+
+    def worst(result):
+        est = result.network.s[band, 1, 0]
+        return float(np.max(np.abs(20 * np.log10(np.abs(est))
+                                   - 20 * np.log10(np.abs(reference)))))
+
+    gated = reflect.fixture_from_reflect(freq, gamma, "OPEN")
+    fitted = reflect.fixture_from_reflect(freq, gamma, "OPEN", model="line_fit")
+
+    assert worst(fitted) < 1.0, f"line_fit : {worst(fitted):.2f} dB"
+    assert worst(fitted) < 0.3 * worst(gated)
+    assert abs(fitted.delay_ps - 300.0) < 5.0
+    assert fitted.quality["mode"] == "bandpass"
+
+
+def test_line_fit_with_open_and_short_in_the_thz_band():
+    """Les deux standards ensemble : G1 algebrique + modele de ligne."""
+
+    freq = np.arange(750e9, 1100e9 + 1, 250e6)
+    thz_line = synthetic_line(freq=freq, delay=300e-12, loss_db_10ghz=2.0)
+
+    result = reflect.fixture_from_open_short(
+        freq,
+        noisy(one_port(thz_line, +1.0), seed=11),
+        noisy(one_port(thz_line, -1.0), seed=12),
+        model="line_fit",
+    )
+
+    band = (freq >= 800e9) & (freq <= 1050e9)
+    est, ref = result.network.s[band, 1, 0], thz_line.s[band, 1, 0]
+    mag = float(np.max(np.abs(20 * np.log10(np.abs(est)) - 20 * np.log10(np.abs(ref)))))
+
+    assert mag < 1.0, f"{mag:.2f} dB"
+    assert result.method == "reflect_open_short_line_fit"
+    assert abs(result.delay_ps - 300.0) < 5.0
+
+
+def test_echo_snr_flags_a_buried_echo():
+    """Le rapport echo / bruit distingue une mesure exploitable d'une mesure noyee."""
+
+    freq = np.arange(750e9, 1100e9 + 1, 250e6)
+    thz_line = synthetic_line(freq=freq, delay=300e-12, loss_db_10ghz=2.0)
+    clean = one_port(thz_line, +1.0)
+
+    quiet = reflect.fixture_from_reflect(freq, clean, "OPEN")
+    buried = reflect.fixture_from_reflect(freq, noisy(clean, level_db=-25.0), "OPEN")
+
+    assert quiet.quality["echo_snr_db"] > buried.quality["echo_snr_db"]
+    assert "dynamic_range_warning" not in quiet.quality
+    assert "dynamic_range_warning" in buried.quality
+
+
+def test_unknown_model_is_rejected(line):
+    with pytest.raises(ValueError):
+        reflect.fixture_from_reflect(FREQ, one_port(line, +1.0), "OPEN", model="magique")
+
+
 def test_passivity_clamp_uses_singular_values():
     """Le critere est max(|a+b|, |a-b|) <= 1, pas |a|^2 + |b|^2 <= 1."""
 

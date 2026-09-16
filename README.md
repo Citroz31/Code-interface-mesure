@@ -59,6 +59,52 @@ resolu algebriquement, sans aucun fenetrage : c'est la methode la plus precise.
 L'ancienne formule du premier ordre reste disponible en page 3 (bouton
 « First order ») pour comparaison.
 
+### Deuxieme methode : modele de ligne ajuste (jusqu'a 1 THz)
+
+Page 3, bouton « Line-model fit ». Apres la meme inversion exacte, le residu
+`P^2` (l'aller-retour de la ligne) n'est plus garde point par point mais
+ajuste aux moindres carres par un modele de ligne :
+
+    -ln|P^2|  = 2 (a sqrt(f) + b f)          effet de peau + pertes dielectriques
+    -arg(P^2) = 2 c sqrt(f) + 4 pi f tau     dispersion + delai
+
+Les deux ajustements sont lineaires : pas d'optimiseur, pas de probleme de
+convergence, et le bruit de mesure est moyenne sur toute la bande au lieu
+d'etre transporte tel quel dans le S2P. La phase du modele etant analytique,
+la racine `P = sqrt(P^2)` n'a plus d'ambiguite de branche.
+
+**Quand l'utiliser.** |S21| est entierement porte par l'echo a `t = 2 tau`,
+dont le niveau vaut le double des pertes de la ligne en dB. Vers 1 THz cet
+echo approche le plancher de bruit du VNA : le fenetrage seul y laisse
+plusieurs dB d'erreur, l'ajustement reste sous 0.25 dB. Sur une bande propre
+et etroite, les deux methodes coincident (ecart < 0.05 dB).
+
+Mesures synthetiques bruitees a -40 dB (`validation/thz/`, ligne 55 ohm,
+300 ps, 2 dB a 10 GHz) — erreur maximale sur |S21| :
+
+| Bande | standards | fenetrage (exact) | modele de ligne |
+|---|---|---|---|
+| WR-1.0, 750 GHz - 1.1 THz | OPEN seul | 8.50 dB | **0.23 dB** |
+| WR-1.0, 750 GHz - 1.1 THz | SHORT seul | 5.77 dB | **0.14 dB** |
+| WR-1.0, 750 GHz - 1.1 THz | OPEN + SHORT | 3.57 dB | **0.22 dB** |
+| 10 MHz - 1 THz | OPEN + SHORT | 4.24 dB | **0.19 dB** |
+
+Le delai est retrouve a 0.5 ps pres dans tous les cas.
+
+**Limites.** Le modele impose sa forme : ligne uniforme et transition
+d'entree constante sur la bande (G1 est ramene a sa mediane). Sur un fixture
+a plusieurs discontinuites fortes, il faut rester sur le modele exact ou
+passer au 2x-thru. Et quand l'echo est completement noye (rapport echo/bruit
+tres faible), aucune methode ne le fait ressortir : voir ci-dessous.
+
+### Plage dynamique : l'indicateur echo / bruit
+
+Chaque extraction reporte `echo_snr_db` : le rapport entre le pic de l'echo
+aller-retour et le plancher de bruit estime hors fenetre. En dessous de
+35 dB, un avertissement signale que |S21| devient incertain — cas courant
+au-dela de 500 GHz. Remedes, dans l'ordre : moyennage ou bande FI plus
+etroite au VNA, fixture plus court, modele de ligne ajuste.
+
 ## Interface adaptative
 
 La fenetre suit la taille que vous lui donnez, sans que rien ne disparaisse :

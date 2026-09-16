@@ -611,6 +611,12 @@ class AFRWizardComplete(tk.Tk):
             font=("Segoe UI", 9, "bold")
         )
 
+        style.configure(
+            "Hint.TLabel",
+            foreground="#4a4a4a",
+            font=("Segoe UI", 8)
+        )
+
     def _header(self):
         bar = ReflowBar(self, spacing=3, padding=(8, 6))
         bar.pack(fill="x")
@@ -750,6 +756,20 @@ class AFRWizardComplete(tk.Tk):
         if clamped:
             self.add_warning(f"{label} : {clamped} point(s) ramenes a la limite passive "
                              f"(critere sur les valeurs singulieres).")
+
+        snr = quality.get("echo_snr_db")
+        if snr is not None and np.isfinite(snr):
+            log.info("%s : echo aller-retour a %.0f dB au-dessus du bruit", label, snr)
+
+        if quality.get("dynamic_range_warning"):
+            self.add_warning(f"{label} : {quality['dynamic_range_warning']}")
+
+        if quality.get("model") == "line_fit":
+            log.info("%s : modele de ligne ajuste, delai %.1f ps, residu %.4f "
+                     "(%.1f dB sous l'echo)", label,
+                     quality.get("line_fit_delay_ps", float("nan")),
+                     quality.get("line_fit_residual", float("nan")),
+                     quality.get("line_fit_residual_db", float("nan")))
 
         if quality.get("warning"):
             self.add_warning(f"{label} : {quality['warning']}")
@@ -1964,10 +1984,28 @@ class AFRWizardComplete(tk.Tk):
         ).pack(anchor="w")
         ttk.Radiobutton(
             model_frame,
+            text="Line-model fit (least squares, recommended above 100 GHz / up to 1 THz)",
+            value="line_fit",
+            variable=self.extraction_model,
+        ).pack(anchor="w")
+        ttk.Radiobutton(
+            model_frame,
             text="First order (legacy, multiple reflections neglected)",
             value="first_order",
             variable=self.extraction_model,
         ).pack(anchor="w")
+
+        model_hint = ttk.Label(
+            model_frame,
+            text=("Single discontinuity: exact, keeps every measured point. "
+                  "Line-model fit: the round trip is fitted by a uniform-line model "
+                  "(skin effect + dielectric + delay), which averages the noise over "
+                  "the whole band; use it when the far echo comes close to the noise "
+                  "floor, typically in the 140 GHz - 1 THz bands."),
+            style="Hint.TLabel",
+        )
+        model_hint.pack(anchor="w", pady=(4, 0), fill="x")
+        wrap_label(model_hint)
 
         row_opt = ReflowBar(model_frame, spacing=4)
         row_opt.pack(fill="x", pady=(6, 0))

@@ -95,9 +95,50 @@ a l'onde stationnaire, desormais reconstruite.
 | Pas de frequence trop grand | avertissement de repliement temporel, pas de frequence a viser |
 | Bruit qui pousse le module de S21 au-dessus de 1 | ramene a la limite passive, nombre de points signale |
 
+## Jeu submillimetrique : `thz/` (jusqu'a 1 THz)
+
+Le sous-dossier `thz/` couvre les bandes ou l'echo aller-retour approche le
+plancher de bruit du VNA. Meme ligne que ci-dessus, mais plus dissipative
+(2 dB a 10 GHz, soit 20 dB a 1 THz en aller simple, donc un echo a -40 dB), et
+les mesures 1 port portent un bruit gaussien de -40 dB.
+
+| Fichier | Contenu |
+|---|---|
+| `generate_thz.py` | genere tout le jeu, sans aucune dependance (Python standard seul) |
+| `OPEN_WR1.s1p`, `SHORT_WR1.s1p` | bande WR-1.0 : 750 GHz - 1.1 THz, pas 250 MHz, 1401 points, bruit -40 dB |
+| `OPEN_BROADBAND.s1p`, `SHORT_BROADBAND.s1p` | 10 MHz - 1 THz d'un seul tenant, pas 500 MHz, 2001 points |
+| `FIXTURE_WR1_reference.s2p`, `FIXTURE_BROADBAND_reference.s2p` | references exactes, sans bruit |
+| `run_validation_thz.py` | extrait avec les deux modeles, ecrit les S2P et affiche le tableau d'ecarts |
+
+Erreur maximale sur |S21| (bords de bande ecartes de 5 %) :
+
+| Bande | standards | `single_discontinuity` | `line_fit` |
+|---|---|---|---|
+| WR-1.0 | OPEN seul | 8.50 dB | **0.23 dB** |
+| WR-1.0 | SHORT seul | 5.77 dB | **0.14 dB** |
+| WR-1.0 | OPEN + SHORT | 3.57 dB | **0.22 dB** |
+| 10 MHz - 1 THz | OPEN seul | 6.20 dB | **0.19 dB** |
+| 10 MHz - 1 THz | SHORT seul | 6.21 dB | **0.19 dB** |
+| 10 MHz - 1 THz | OPEN + SHORT | 4.24 dB | **0.19 dB** |
+
+Le delai est retrouve entre 299.5 et 300.4 ps dans tous les cas (reference
+300 ps), et l'ecart sur |S11| tombe a 0.0002 - 0.001 avec le modele de ligne.
+
+Ce qu'il faut en retenir :
+
+- le fenetrage n'est pas faux, il est **limite par la plage dynamique** :
+  sans bruit, il reste a 0.03 dB a 1 THz. C'est le bruit du VNA, transporte
+  point par point dans le S2P, qui coute les dB ;
+- le modele de ligne moyenne ce bruit sur toute la bande et redonne un S2P
+  exploitable ;
+- quand l'echo est completement noye, aucune des deux methodes ne le
+  restitue. C'est le role de l'indicateur `echo_snr_db` (avertissement en
+  dessous de 35 dB) : mieux vaut signaler la mesure que livrer un S2P faux.
+
 ## Relancer
 
 ```
 pip install -r requirements.txt
 python validation/run_validation.py
+python validation/thz/run_validation_thz.py
 ```

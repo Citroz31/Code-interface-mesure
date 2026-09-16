@@ -489,6 +489,41 @@ def find_peak(td: TimeDomain, t_min: float | None = None,
     return float(td.t[idx])
 
 
+def echo_snr(td: TimeDomain, center: float, half_width: float,
+             guard: float = 3.0) -> float:
+    """
+    Plage dynamique de l'echo lointain, en dB.
+
+    Rapport entre le maximum de |h| dans la fenetre ``center +/- half_width``
+    et le plancher de bruit, estime par la mediane de |h| au-dela de
+    ``center + guard * half_width`` (avant le repliement a span / 2).
+
+    C'est la limite physique de l'extraction S1P -> S2P en millimetrique :
+    l'echo aller-retour vaut |S21|^2, donc le double des pertes de la ligne en
+    dB. Vers 1 THz il peut passer sous le plancher de bruit du VNA, et aucun
+    traitement ne le fait alors ressortir. Retourne +inf si le plancher ne peut
+    pas etre estime (trop peu de points hors fenetre).
+    """
+
+    t = np.asarray(td.t, dtype=float)
+    magnitude = np.abs(td.h)
+    inside_span = t <= td.span / 2
+
+    inside = inside_span & (np.abs(t - center) <= max(half_width, td.dt))
+    outside = inside_span & (t > center + guard * half_width)
+
+    if not np.any(inside) or np.count_nonzero(outside) < 4:
+        return float("inf")
+
+    peak = float(np.max(magnitude[inside]))
+    floor = float(np.median(magnitude[outside]))
+
+    if floor <= 0.0:
+        return float("inf")
+
+    return float(20.0 * np.log10(max(peak, 1e-300) / floor))
+
+
 # ---------------------------------------------------------------------------
 # Racine carree complexe continue
 # ---------------------------------------------------------------------------

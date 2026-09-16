@@ -35,10 +35,36 @@ Determination de G1
   C'est la methode la plus precise : S11 et S21 sont exacts sur un fixture
   conforme au modele.
 
+Deuxieme methode : modele de ligne ajuste ('line_fit')
+-----------------------------------------------------
+Le residu (1) est l'aller-retour P^2 d'une ligne. Plutot que de le garder
+point par point, on l'ajuste au sens des moindres carres par le modele
+
+    -ln|P^2|  = 2 (a sqrt(f) + b f)          effet de peau + pertes dielectriques
+    -arg(P^2) = 2 c sqrt(f) + 4 pi f tau     dispersion + delai
+
+Les deux ajustements sont lineaires en leurs coefficients : pas d'optimiseur,
+pas de probleme de convergence, et le bruit de mesure est moyenne sur tous les
+points de la bande au lieu d'etre transporte tel quel dans le S2P. La phase du
+modele etant analytique et continue, la racine P = sqrt(P^2) n'a plus aucune
+ambiguite de branche.
+
+C'est la methode a utiliser en bande millimetrique et submillimetrique
+(140 GHz - 1 THz), ou l'echo aller-retour approche le plancher de bruit du
+VNA : le fenetrage seul y laisse plusieurs dB d'erreur la ou l'ajustement
+reste sous 0.1 dB. En contrepartie elle impose la forme du modele : ligne
+uniforme et transition d'entree constante sur la bande (G1 pris egal a sa
+mediane). Sur une bande etroite et propre, les deux methodes coincident.
+
 Limites : le modele suppose une seule discontinuite dominante (connecteur ou
 transition d'entree) suivie d'une ligne uniforme, et un fixture symetrique
 (S22 = S11) et reciproque (S12 = S21). Un fixture a plusieurs discontinuites
 fortes demande le 2x-thru.
+
+Plage dynamique : |S21| est deduit de l'echo a t = 2 tau, dont le niveau vaut
+le carre de la transmission. Quand cet echo passe sous le plancher de bruit
+(voir ``echo_snr_db`` dans le rapport de qualite), aucune des deux methodes ne
+peut le restituer ; l'extraction est alors signalee comme incertaine.
 """
 
 from __future__ import annotations
@@ -55,7 +81,14 @@ from .models import FixtureResult
 log = logging.getLogger(__name__)
 
 TINY = 1e-20
-MODELS = ("single_discontinuity", "first_order")
+MODELS = ("single_discontinuity", "line_fit", "first_order")
+
+# Suffixe ajoute au nom de methode selon le modele employe.
+METHOD_SUFFIX = {"single_discontinuity": "", "line_fit": "_line_fit",
+                 "first_order": "_first_order"}
+
+# En dessous de ce rapport echo / bruit (dB), |S21| n'est plus fiable.
+ECHO_SNR_WARNING_DB = 35.0
 
 
 def gamma_load(kind) -> float:
@@ -149,6 +182,21 @@ def _gates(td: sig.TimeDomain, t_far: float):
     quality["gate_half_ps"] = gate_half * 1e12
     quality["near_split_ps"] = t_split * 1e12
 
+    snr = sig.echo_snr(td, t_far, gate_half)
+    quality["echo_snr_db"] = snr
+    if snr < ECHO_SNR_WARNING_DB:
+        message = (
+            f"Echo aller-retour a seulement {snr:.0f} dB au-dessus du plancher "
+            f"de bruit (repere de confiance : {ECHO_SNR_WARNING_DB:.0f} dB). "
+            f"|S21| est entierement porte par cet echo, dont le niveau vaut le "
+            f"double des pertes de la ligne en dB : sous cette limite "
+            f"l'extraction devient incertaine, cas frequent au-dela de 500 GHz. "
+            f"Remedes : moyennage ou bande FI plus etroite au VNA, fixture plus "
+            f"court, ou modele 'line_fit' qui moyenne le bruit sur toute la bande."
+        )
+        log.warning(message)
+        quality["dynamic_range_warning"] = message
+
     span_warning = sig.check_time_span(td, t_far + gate_half)
     if span_warning:
         quality["warning"] = span_warning
@@ -218,6 +266,144 @@ def _gate_echo(fu, x, t_far: float, td_ref: sig.TimeDomain, half_fraction: float
 
     half = max(7 * td.tres, half_fraction * t_far)
     return sig.gate_to_freq(td, sig.gate_around(td, t_far, half))
+
+
+# ---------------------------------------------------------------------------
+# Deuxieme methode : modele de ligne ajuste aux moindres carres
+# ---------------------------------------------------------------------------
+
+LINE_FIT_MIN_POINTS = 8
+
+
+def fit_line_model(f, p_squared, band=None) -> dict:
+    """
+    Ajuste l'aller-retour P^2 par le modele de ligne (voir l'en-tete) :
+
+        -ln|P^2|  = alpha_root sqrt(f) + alpha_linear f + log_offset
+        -arg(P^2) = phase_root sqrt(f) + phase_linear f + phase_offset
+
+    Deux moindres carres lineaires independants (module puis phase deroulee).
+    Retourne les six coefficients et le delai aller ``delay_s`` = phase_linear
+    / (4 pi) : le facteur 4 pi vient de l'aller-retour, ou la phase vaut
+    -2 * 2 pi f tau.
+
+    ``band`` = (f_min, f_max) restreint l'ajustement aux frequences reellement
+    mesurees : en mode passe-bas la grille descend jusqu'a DC, et les points
+    ajoutes sous la premiere frequence mesuree sont extrapoles, donc a exclure.
+    Le deroulement de la phase, lui, se fait sur toute la grille pour rester
+    continu.
+    """
+
+    f = np.asarray(f, dtype=float)
+    p2 = np.asarray(p_squared, dtype=complex)
+
+    usable = np.isfinite(p2) & (np.abs(p2) > 0.0)
+    if band is not None:
+        usable &= (f >= band[0]) & (f <= band[1])
+    if np.count_nonzero(usable) < LINE_FIT_MIN_POINTS:
+        raise ValueError("Trop peu de points exploitables pour ajuster le modele de ligne "
+                         f"({np.count_nonzero(usable)} < {LINE_FIT_MIN_POINTS}).")
+
+    root = np.sqrt(np.maximum(f, 0.0))
+    basis = np.column_stack([root, f, np.ones_like(f)])
+
+    attenuation = -np.log(np.maximum(np.abs(p2), TINY))
+    # Deroulement sur toute la bande avant selection : les sauts de 2 pi se
+    # suivent de proche en proche.
+    phase = -np.unwrap(np.angle(p2))
+
+    alpha_root, alpha_linear, log_offset = np.linalg.lstsq(
+        basis[usable], attenuation[usable], rcond=None)[0]
+    phase_root, phase_linear, phase_offset = np.linalg.lstsq(
+        basis[usable], phase[usable], rcond=None)[0]
+
+    return {
+        "alpha_root": float(alpha_root),
+        "alpha_linear": float(alpha_linear),
+        "log_offset": float(log_offset),
+        "phase_root": float(phase_root),
+        "phase_linear": float(phase_linear),
+        "phase_offset": float(phase_offset),
+        "delay_s": float(phase_linear / (4.0 * np.pi)),
+    }
+
+
+def _line_model(f, coefficients: dict, scale: float) -> np.ndarray:
+    f = np.asarray(f, dtype=float)
+    root = np.sqrt(np.maximum(f, 0.0))
+
+    attenuation = (coefficients["alpha_root"] * root
+                   + coefficients["alpha_linear"] * f
+                   + coefficients["log_offset"])
+    phase = (coefficients["phase_root"] * root
+             + coefficients["phase_linear"] * f
+             + coefficients["phase_offset"])
+
+    return np.exp(-scale * attenuation) * np.exp(-1j * scale * phase)
+
+
+def line_model_p_squared(f, coefficients: dict) -> np.ndarray:
+    """Aller-retour P^2 reconstruit par le modele ajuste."""
+
+    return _line_model(f, coefficients, 1.0)
+
+
+def line_model_propagation(f, coefficients: dict) -> np.ndarray:
+    """
+    Propagation aller P = sqrt(P^2) issue du modele.
+
+    La phase du modele est analytique et continue : la diviser par deux suffit,
+    sans deroulement ni ancrage de branche, contrairement a la racine d'un P^2
+    mesure.
+    """
+
+    return _line_model(f, coefficients, 0.5)
+
+
+def _median_constant(values) -> np.ndarray:
+    """Valeur mediane (partie reelle et imaginaire) repetee sur toute la bande."""
+
+    values = np.asarray(values, dtype=complex)
+    median = complex(float(np.median(values.real)), float(np.median(values.imag)))
+    return np.full(values.shape, median, dtype=complex)
+
+
+def line_fit_propagation(fu, p_squared, g1, quality: dict, band=None):
+    """
+    Applique le modele de ligne : G1 constant (mediane) et P analytique.
+
+    Le modele suppose la transition d'entree stable sur la bande ; sa mediane
+    est prise plutot que sa moyenne pour resister aux points bruites.
+    ``band`` : bande reellement mesuree, voir ``fit_line_model``.
+    """
+
+    coefficients = fit_line_model(fu, p_squared, band)
+    propagation = line_model_propagation(fu, coefficients)
+    fitted = line_model_p_squared(fu, coefficients)
+
+    p_squared = np.asarray(p_squared, dtype=complex)
+
+    # Ecart modele / mesure, sur la bande mesuree uniquement.
+    fu = np.asarray(fu, dtype=float)
+    inside = np.ones(fu.shape, dtype=bool) if band is None else \
+        ((fu >= band[0]) & (fu <= band[1]))
+
+    level = float(np.sqrt(np.mean(np.abs(p_squared[inside]) ** 2)))
+    residual = float(np.sqrt(np.mean(np.abs(p_squared[inside] - fitted[inside]) ** 2)))
+
+    quality["line_fit"] = coefficients
+    quality["line_fit_delay_ps"] = coefficients["delay_s"] * 1e12
+    quality["line_fit_residual"] = residual
+    quality["line_fit_residual_db"] = float(
+        20 * np.log10(max(residual, 1e-15) / max(level, 1e-15)))
+
+    g1_constant = _median_constant(g1)
+    if len(g1_constant):
+        median = complex(g1_constant[0])
+        quality["gamma1_median_mag"] = float(abs(median))
+        quality["gamma1_median_deg"] = float(np.degrees(np.angle(median)))
+
+    return g1_constant, propagation
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +554,10 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
     Fixture 2 ports a partir d'une seule mesure 1 port (OPEN ou SHORT).
 
     ``load``             : 'OPEN' / 'SHORT' (ou une cle / un nom de fichier).
-    ``model``            : 'single_discontinuity' (defaut, exact apres G1) ou
+    ``model``            : 'single_discontinuity' (defaut, exact apres G1),
+                           'line_fit' (modele de ligne ajuste aux moindres
+                           carres, recommande au-dela de 100 GHz ou des que
+                           l'echo approche le plancher de bruit) ou
                            'first_order' (ancienne formule, reflexions
                            multiples negligees).
     ``smooth_points``    : lissage Savitzky-Golay (dB et phase), 0 = aucun.
@@ -399,14 +588,21 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
 
     g1 = sig.gate_to_freq(td, g_near)
 
-    if model == "single_discontinuity":
-        # Transition d'entree retiree exactement, puis fenetrage de l'echo unique
+    if model in ("single_discontinuity", "line_fit"):
+        # Transition d'entree retiree exactement, puis exploitation de l'echo unique
         residual = deembed_input(gamma_u, g1) / gl
         p_squared = _gate_echo(fu, residual, t_far, td)
-        propagation = _sqrt(_safe(p_squared, TINY), fu, td, t_far)
-        quality["model_residual"] = float(
-            np.max(np.abs(propagation * propagation - p_squared))
-        )
+
+        if model == "line_fit":
+            # L'ecart modele / mesure est reporte par line_fit_residual.
+            g1, propagation = line_fit_propagation(fu, p_squared, g1, quality,
+                                                   band=(f[0], f[-1]))
+        else:
+            propagation = _sqrt(_safe(p_squared, TINY), fu, td, t_far)
+            quality["model_residual"] = float(
+                np.max(np.abs(propagation * propagation - p_squared))
+            )
+
         g1, propagation = constrain_physical(g1, propagation, quality)
         s11u, s21u = network_from_model(g1, propagation)
     else:
@@ -416,8 +612,7 @@ def fixture_from_reflect(f, gamma, load="OPEN", z0: float = 50.0,
         s11u = g1
         quality["sqrt_residual"] = float(np.max(np.abs(s21u * s21u - s21_squared)))
 
-    method = ("reflect_short" if gl < 0 else "reflect_open") + (
-        "" if model == "single_discontinuity" else "_first_order")
+    method = ("reflect_short" if gl < 0 else "reflect_open") + METHOD_SUFFIX[model]
 
     result = _finish(f, fu, s11u, s21u, gamma, z0, method, quality, interp_method,
                      smooth_points, enforce_passivity, g1=g1)
@@ -441,6 +636,11 @@ def fixture_from_open_short(f, gamma_open, gamma_short, z0: float = 50.0,
     (2) : aucun fenetrage n'intervient dans la determination de S11, et S21
     decoule de la transformation exacte (1). C'est la methode la plus
     precise des trois (OPEN seul, SHORT seul, OPEN + SHORT).
+
+    Avec 'line_fit', ce meme G1 algebrique est ramene a sa mediane et P^2 est
+    ajuste par le modele de ligne : c'est la combinaison la plus robuste en
+    bande millimetrique, ou les deux mesures moyennent deja le bruit avant
+    l'ajustement.
     """
 
     if model not in MODELS:
@@ -472,19 +672,27 @@ def fixture_from_open_short(f, gamma_open, gamma_short, z0: float = 50.0,
     _, _, quality = _gates(td_p, t_far)
 
     p_squared = _gate_echo(fu, p_squared_raw, t_far, td_p)
-    propagation = _sqrt(_safe(p_squared, TINY), fu, td_p, t_far)
+
+    if model == "line_fit":
+        g1, propagation = line_fit_propagation(fu, p_squared, g1, quality,
+                                               band=(f[0], f[-1]))
+    else:
+        propagation = _sqrt(_safe(p_squared, TINY), fu, td_p, t_far)
+        quality["model_residual"] = float(
+            np.max(np.abs(propagation * propagation - p_squared))
+        )
+
     g1, propagation = constrain_physical(g1, propagation, quality)
     s11u, s21u = network_from_model(g1, propagation)
 
     quality["mode"] = td_p.mode
     quality["model"] = model
     quality["load"] = "OPEN+SHORT"
-    quality["model_residual"] = float(np.max(np.abs(propagation * propagation - p_squared)))
 
     _open_short_consistency(f, gamma_open, gamma_short, z0, interp_method, quality)
 
     result = _finish(f, fu, s11u, s21u, 0.5 * (gamma_open + gamma_short), z0,
-                     "reflect_open_short", quality, interp_method,
+                     "reflect_open_short" + METHOD_SUFFIX[model], quality, interp_method,
                      smooth_points, enforce_passivity, g1=g1)
 
     # Le modele doit expliquer les DEUX mesures : on retient la pire des deux

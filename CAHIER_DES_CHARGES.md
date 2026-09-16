@@ -63,6 +63,19 @@ Retirer la transition d'entrée ne demande donc aucune approximation : les réfl
 
   C'est la méthode la plus précise. Sur une ligne synthétique, S11 et S21 sont exacts.
 
+### 4.1 bis Deuxième méthode : modèle de ligne ajusté (`line_fit`)
+
+Le résidu (1) est l'aller-retour P² d'une ligne. Il est ajusté aux moindres carrés par
+
+    −ln|P²|  = 2 (a √f + b f)          effet de peau + pertes diélectriques
+    −arg(P²) = 2 c √f + 4 π f τ        dispersion + délai
+
+Deux moindres carrés **linéaires** (module, puis phase déroulée) : aucun optimiseur, aucune divergence possible, et le bruit est moyenné sur toute la bande. La phase du modèle étant analytique, la racine P = √(P²) n'a plus d'ambiguïté de branche.
+
+Intérêt : |S21| est porté par l'écho à t = 2τ, dont le niveau vaut le double des pertes en dB. Entre 500 GHz et 1 THz cet écho frôle le plancher de bruit du VNA ; le fenêtrage y laisse 3 à 8 dB d'erreur, l'ajustement reste sous 0,25 dB (jeu `validation/thz/`). Contrepartie : le modèle impose une ligne uniforme et une transition d'entrée constante sur la bande (Γ₁ ramené à sa médiane).
+
+Diagnostic associé : `echo_snr_db`, rapport entre le pic de l'écho et le plancher de bruit hors fenêtre. En dessous de 35 dB, l'extraction est signalée comme incertaine — quand l'écho est totalement noyé, aucune méthode ne le restitue et il faut le dire plutôt que de livrer un S2P faux.
+
 ### 4.2 Ancienne formule du premier ordre (conservée pour comparaison)
 
 S21² = Γ_far / Γ_L · (1 − S11²) à partir de la réflexion lointaine fenêtrée. Elle néglige les réflexions multiples : sur un fixture court et désadapté (100 Ω, 20 ps, 200 GHz) l'erreur atteint 3,4 dB contre 0,25 dB pour le modèle exact. Elle reste sélectionnable en page 3.
