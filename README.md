@@ -76,6 +76,21 @@ La fenetre suit la taille que vous lui donnez, sans que rien ne disparaisse :
 La taille minimale est passee de 1040 x 700 a 560 x 420 : en dessous, tout
 reste atteignable par defilement.
 
+Ce qui s'adapte, page par page :
+
+| Page | Adaptation |
+|---|---|
+| 1. Describe Fixture | deux colonnes empilees sous 780 px, schema du DUT redimensionne |
+| 2. Specify Standards | schemas des standards redimensionnes, colonnes ponderees, resume replie |
+| 3. Measure Standards | table de fichiers etiree, ligne lissage / passivite repliable, resultats sur colonnes ponderees |
+| 4. Remove Fixture | cases entree / sortie repliables, chemin de mesure etire, compte rendu pleine largeur |
+| 5. Save Fixture | cadres pleine largeur, chemin de sortie etire |
+| 6. Batch Process | dossiers etires, journal pleine largeur |
+
+Les schemas de fixture (`FixtureDiagram`) sont dessines dans un repere de
+reference puis mis a l'echelle de leur taille reelle : ils suivent la largeur
+de leur colonne au lieu d'imposer un defilement horizontal.
+
 ## Retirer les fixtures d'une mesure brute (page 4)
 
 La page 4 corrige une mesure brute `ligne A + DUT + ligne B` :

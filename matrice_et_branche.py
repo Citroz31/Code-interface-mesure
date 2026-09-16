@@ -64,7 +64,12 @@ class FixtureDiagram(tk.Canvas):
         "text": "white",
     }
 
-    def __init__(self, parent, width=390, height=90, **kwargs):
+    # Espace de dessin de reference : toutes les methodes draw_* sont ecrites
+    # dans ces coordonnees, puis mises a l'echelle de la taille reelle.
+    DESIGN_WIDTH = 390
+    DESIGN_HEIGHT = 90
+
+    def __init__(self, parent, width=200, height=70, **kwargs):
         background = kwargs.pop("background", CANVAS_BG)
 
         super().__init__(
@@ -79,28 +84,65 @@ class FixtureDiagram(tk.Canvas):
             **kwargs
         )
 
+        # Dernier schema demande, rejoue a chaque redimensionnement.
+        self._pending = None
+        self.bind("<Configure>", self._on_configure)
+
+    # ------------------------------------------------------------------
+    # Mise a l'echelle
+    # ------------------------------------------------------------------
+
+    def _on_configure(self, _event=None):
+        if self._pending is not None:
+            method, args = self._pending
+            method(self, *args, _replay=True)
+
+    def _remember(self, method, args):
+        self._pending = (method, args)
+
+    def _scale(self):
+        width = max(self.winfo_width(), 1)
+        height = max(self.winfo_height(), 1)
+
+        if width <= 1:
+            width = int(self["width"])
+        if height <= 1:
+            height = int(self["height"])
+
+        return width / self.DESIGN_WIDTH, height / self.DESIGN_HEIGHT
+
     def _connector(self, x1, y1, x2, y2, color):
         """Draw an RF connector on the diagram."""
 
-        self.create_rectangle(x1, y1, x2, y2, fill=color, outline=color, width=0 )
+        sx, sy = self._scale()
+        self.create_rectangle(x1 * sx, y1 * sy, x2 * sx, y2 * sy,
+                              fill=color, outline=color, width=0)
 
     def _block(self, x1, y1, x2, y2, text, color):
         """Draw a fixture or DUT block."""
 
-        self.create_rectangle( x1, y1, x2, y2, fill=color, outline=color, width=1)
+        sx, sy = self._scale()
+        self.create_rectangle(x1 * sx, y1 * sy, x2 * sx, y2 * sy,
+                              fill=color, outline=color, width=1)
+
+        # La police suit la hauteur, avec un plancher lisible.
+        size = max(6, min(9, int(round(9 * sy))))
 
         self.create_text(
-            (x1 + x2) / 2,
-            (y1 + y2) / 2,
+            (x1 + x2) / 2 * sx,
+            (y1 + y2) / 2 * sy,
             text=text,
             fill=self.COLORS["text"],
-            font=("Segoe UI", 9, "bold")
+            font=("Segoe UI", size, "bold")
         )
 
-    def draw_dut_chain(self):
+    def draw_dut_chain(self, _replay=False):
         """Draw Fixture A + DUT + Fixture B."""
 
         self.delete("all")
+
+        if not _replay:
+            self._remember(FixtureDiagram.draw_dut_chain, ())
 
         y1 = 25
         y2 = 65
@@ -148,10 +190,13 @@ class FixtureDiagram(tk.Canvas):
             self.COLORS["port"]
         )
 
-    def draw_thru_ab(self):
+    def draw_thru_ab(self, _replay=False):
         """Draw the standard Fixture A + Fixture B."""
 
         self.delete("all")
+
+        if not _replay:
+            self._remember(FixtureDiagram.draw_thru_ab, ())
 
         y1 = 25
         y2 = 65
@@ -190,10 +235,13 @@ class FixtureDiagram(tk.Canvas):
             self.COLORS["port"]
         )
 
-    def draw_thru_aa(self):
+    def draw_thru_aa(self, _replay=False):
         """Draw the standard Fixture A + Fixture A'."""
 
         self.delete("all")
+
+        if not _replay:
+            self._remember(FixtureDiagram.draw_thru_aa, ())
 
         y1 = 25
         y2 = 65
@@ -232,10 +280,13 @@ class FixtureDiagram(tk.Canvas):
             self.COLORS["port"]
         )
 
-    def draw_thru_bb(self):
+    def draw_thru_bb(self, _replay=False):
         """Draw the standard Fixture B' + Fixture B."""
 
         self.delete("all")
+
+        if not _replay:
+            self._remember(FixtureDiagram.draw_thru_bb, ())
 
         y1 = 25
         y2 = 65
@@ -274,10 +325,13 @@ class FixtureDiagram(tk.Canvas):
             self.COLORS["port"]
         )
 
-    def draw_reflect(self, fixture):
+    def draw_reflect(self, fixture, _replay=False):
         """Draw an Open or Short standard connected to Fixture A or B."""
 
         self.delete("all")
+
+        if not _replay:
+            self._remember(FixtureDiagram.draw_reflect, (fixture,))
 
         fixture_key = fixture.lower()
         color = self.COLORS[fixture_key]
@@ -1289,7 +1343,7 @@ class AFRWizardComplete(tk.Tk):
         for text, var in items:
             ttk.Checkbutton(advanced, text=text, variable=var, command=self.page1_changed).pack(anchor="w", pady=2)
 
-        self.main_diagram = FixtureDiagram(right, width=430, height=100)
+        self.main_diagram = FixtureDiagram(right, width=240, height=80)
         self.main_diagram.pack(pady=(30, 5))
         self.main_diagram.draw_dut_chain()
         ttk.Label(right, text="Current Fixture and DUT Assumptions", font=("Segoe UI", 10, "bold")).pack()
@@ -1303,8 +1357,10 @@ class AFRWizardComplete(tk.Tk):
         self.standard_area = ttk.LabelFrame(self.page2, text="Required and optional standards",
                                              style="Section.TLabelframe", padding=12)
         self.standard_area.pack(fill="x")
-        self.standard_area.columnconfigure(1, weight=1)
-        self.standard_area.columnconfigure(3, weight=1)
+        # Les colonnes qui portent les schemas absorbent la largeur : les
+        # schemas se redimensionnent au lieu de forcer un defilement.
+        self.standard_area.columnconfigure(1, weight=2, minsize=120)
+        self.standard_area.columnconfigure(2, weight=1, minsize=140)
 
         self.use_2x_thru = tk.BooleanVar(value=True)
         self.use_second_2x = tk.BooleanVar(value=False)
@@ -1316,14 +1372,14 @@ class AFRWizardComplete(tk.Tk):
 
         self.chk_2x = ttk.Checkbutton(self.standard_area, text="2X Thru", variable=self.use_2x_thru,command=self.on_2x_thru_changed)
         self.chk_2x.grid(row=0, column=0, sticky="w", pady=5)
-        self.diag_2x = FixtureDiagram(self.standard_area, width=340, height=82)
-        self.diag_2x.grid(row=0, column=1, sticky="w")
+        self.diag_2x = FixtureDiagram(self.standard_area, width=190, height=70)
+        self.diag_2x.grid(row=0, column=1, sticky="ew", padx=(6, 0))
 
         self.chk_second = ttk.Checkbutton(self.standard_area, text="Second 2X Thru", variable=self.use_second_2x,command=self.on_second_2x_thru_changed)
-        self.diag_second = FixtureDiagram(self.standard_area, width=340, height=82)
+        self.diag_second = FixtureDiagram(self.standard_area, width=190, height=70)
 
         self.chk_dut = ttk.Checkbutton(self.standard_area, text="Fixtured DUT", variable=self.use_fixtured_dut,command=self._store_page2)
-        self.diag_dut = FixtureDiagram(self.standard_area, width=340, height=82)
+        self.diag_dut = FixtureDiagram(self.standard_area, width=190, height=70)
         self.diag_dut.draw_dut_chain()
 
         self.reflect_a_frame = ttk.Frame(self.standard_area)
@@ -1331,8 +1387,9 @@ class AFRWizardComplete(tk.Tk):
         self.open_a_check.grid(row=0, column=0, sticky="w")
         self.short_a_check = ttk.Checkbutton(self.reflect_a_frame, text="Short", variable=self.short_a,command=self.on_reflect_changed)
         self.short_a_check.grid(row=1, column=0, sticky="w")
-        self.diag_reflect_a = FixtureDiagram(self.reflect_a_frame, width=230, height=82)
-        self.diag_reflect_a.grid(row=0, column=1, rowspan=2)
+        self.diag_reflect_a = FixtureDiagram(self.reflect_a_frame, width=150, height=70)
+        self.diag_reflect_a.grid(row=0, column=1, rowspan=2, sticky="ew", padx=(6, 0))
+        self.reflect_a_frame.columnconfigure(1, weight=1)
         self.diag_reflect_a.draw_reflect("A")
 
         self.reflect_b_frame = ttk.Frame(self.standard_area)
@@ -1342,8 +1399,9 @@ class AFRWizardComplete(tk.Tk):
 
         self.short_b_check = ttk.Checkbutton(self.reflect_b_frame,text="Short",variable=self.short_b,command=self.on_reflect_changed)
         self.short_b_check.grid(row=1,column=0,sticky="w")
-        self.diag_reflect_b = FixtureDiagram(self.reflect_b_frame, width=230, height=82)
-        self.diag_reflect_b.grid(row=0, column=1, rowspan=2)
+        self.diag_reflect_b = FixtureDiagram(self.reflect_b_frame, width=150, height=70)
+        self.diag_reflect_b.grid(row=0, column=1, rowspan=2, sticky="ew", padx=(6, 0))
+        self.reflect_b_frame.columnconfigure(1, weight=1)
         self.diag_reflect_b.draw_reflect("B")
 
         advanced = ttk.LabelFrame(self.page2, text="Advanced Settings", style="Section.TLabelframe", padding=12)
@@ -1540,14 +1598,14 @@ class AFRWizardComplete(tk.Tk):
             self.chk_second.configure(state="normal")
             self.chk_second.grid(row=1, column=0, sticky="w", pady=5)
             self.diag_second.draw_thru_bb()
-            self.diag_second.grid(row=1, column=1, sticky="w")
+            self.diag_second.grid(row=1, column=1, sticky="ew", padx=(6, 0))
 
             self.chk_dut.configure(state="normal")
             self.chk_dut.grid(row=2, column=0, sticky="w", pady=5)
-            self.diag_dut.grid(row=2, column=1, sticky="w")
+            self.diag_dut.grid(row=2, column=1, sticky="ew", padx=(6, 0))
 
-            self.reflect_a_frame.grid(row=0, column=2, sticky="w", padx=(20, 0))
-            self.reflect_b_frame.grid(row=1, column=2, sticky="w", padx=(20, 0))
+            self.reflect_a_frame.grid(row=0, column=2, sticky="ew", padx=(16, 0))
+            self.reflect_b_frame.grid(row=1, column=2, sticky="ew", padx=(16, 0))
             self.rule_summary.set(
                 "Characterization fixture differs from the DUT measurement fixture: "
                 "2X Thru A+A' and Second 2X Thru B'+B are required. "
@@ -1561,9 +1619,9 @@ class AFRWizardComplete(tk.Tk):
             self.use_fixtured_dut.set(False)
             self.chk_dut.configure(state="normal")
 
-            self.reflect_a_frame.grid(row=0, column=2, sticky="w", padx=(20, 0))
+            self.reflect_a_frame.grid(row=0, column=2, sticky="ew", padx=(16, 0))
             if unequal_length or unequal_match:
-                self.reflect_b_frame.grid(row=1, column=2, sticky="w", padx=(20, 0))
+                self.reflect_b_frame.grid(row=1, column=2, sticky="ew", padx=(16, 0))
                 reason = "length" if unequal_length and not unequal_match else "match/length"
                 self.rule_summary.set(
                     f"Fixture A and Fixture B have different {reason}: "
@@ -1848,7 +1906,8 @@ class AFRWizardComplete(tk.Tk):
         ]
 
     def _build_page3(self):
-        ttk.Label(self.page3, text="Measure or Load Calibration Standards", style="PageTitle.TLabel").pack(anchor="w", pady=(0,10))
+        wrap_label(ttk.Label(self.page3, text="Measure or Load Calibration Standards",
+                     style="PageTitle.TLabel", wraplength=700)).pack(anchor="w", fill="x", pady=(0, 10))
         self.files_box = ttk.LabelFrame(self.page3, text="Calibration standard files", style="Section.TLabelframe", padding=12)
         self.files_box.pack(fill="x")
         self.standard_file_vars = {}
@@ -1857,6 +1916,8 @@ class AFRWizardComplete(tk.Tk):
         calc.pack(fill="x", pady=12)
         self.result_frame = ttk.Frame(calc)
         self.result_frame.pack(fill="x")
+        for _column in range(3):
+            self.result_frame.columnconfigure(_column, weight=1)
 
         self.port_result_rows = {}
         self.row_delays = {}
@@ -1873,7 +1934,7 @@ class AFRWizardComplete(tk.Tk):
         self.interpolation_method = tk.StringVar(value="Linear")
         self.enable_filter = tk.BooleanVar(value=False)
         self.filter_method = tk.StringVar(value="Phase Only")
-        r=ttk.Frame(td); r.pack(anchor="w"); ttk.Label(r,text="Step Rise Time:").pack(side="left")
+        r = ttk.Frame(td); r.pack(anchor="w", fill="x"); ttk.Label(r, text="Step Rise Time:").pack(side="left")
         ttk.Entry(r,textvariable=self.step_rise,width=10).pack(side="left",padx=5); ttk.Label(r,text="ps").pack(side="left")
         self.extraction_model = tk.StringVar(value="single_discontinuity")
         self.smooth_points = tk.IntVar(value=0)
@@ -1907,17 +1968,21 @@ class AFRWizardComplete(tk.Tk):
             variable=self.extraction_model,
         ).pack(anchor="w")
 
-        row_opt = ttk.Frame(model_frame)
-        row_opt.pack(anchor="w", pady=(6, 0))
-        ttk.Label(row_opt, text="Smoothing (points, 0 = none):").pack(side="left")
-        ttk.Spinbox(row_opt, from_=0, to=201, increment=2, width=6,
+        row_opt = ReflowBar(model_frame, spacing=4)
+        row_opt.pack(fill="x", pady=(6, 0))
+
+        smoothing = ttk.Frame(row_opt)
+        ttk.Label(smoothing, text="Smoothing (points, 0 = none):").pack(side="left")
+        ttk.Spinbox(smoothing, from_=0, to=201, increment=2, width=6,
                     textvariable=self.smooth_points).pack(side="left", padx=5)
-        ttk.Checkbutton(row_opt, text="Enforce passivity (|S21| <= 1)",
-                        variable=self.enforce_passivity).pack(side="left", padx=15)
+        row_opt.add(smoothing)
+
+        row_opt.add(ttk.Checkbutton(row_opt, text="Enforce passivity (|S21| <= 1)",
+                                    variable=self.enforce_passivity))
 
         self.eps_r_eff = tk.DoubleVar(value=1.0)
         self.eps_r_eff.trace_add("write", lambda *_: self.refresh_length_labels())
-        r_eps = ttk.Frame(td); r_eps.pack(anchor="w", pady=(4, 0))
+        r_eps = ttk.Frame(td); r_eps.pack(anchor="w", fill="x", pady=(4, 0))
         ttk.Label(r_eps, text="Effective \u03b5r (line length = c \u00b7 TTD / \u221a\u03b5r):").pack(side="left")
         ttk.Entry(r_eps, textvariable=self.eps_r_eff, width=10).pack(side="left", padx=5)
         # ==================================================
@@ -1945,7 +2010,7 @@ class AFRWizardComplete(tk.Tk):
         ).grid(row=1,column=1,padx=5)
 
         interp_frame = ttk.Frame(td)
-        interp_frame.pack(anchor="w", pady=5)
+        interp_frame.pack(anchor="w", fill="x", pady=5)
         ttk.Label(interp_frame,text="Method:").pack(side="left", padx=(20,5))
         ttk.Combobox(interp_frame,textvariable=self.interpolation_method,values=["Linear","PCHIP","Cubic Spline","Akima"],state="readonly",width=16).pack(side="left")
         ttk.Checkbutton(td,text="Enable Frequency Interpolation",variable=self.enable_interpolation).pack(anchor="w", pady=5)
@@ -2037,7 +2102,7 @@ class AFRWizardComplete(tk.Tk):
                 row=i, column=1, sticky="ew", padx=5)
             ttk.Button(self.files_box,text="Load...",command=lambda k=key:self.load_standard(k)).grid(row=i,column=2,padx=3)
             ttk.Button(self.files_box,text="Measure",command=lambda k=key:self.measure_standard(k)).grid(row=i,column=3,padx=3)
-        self.files_box.columnconfigure(1,weight=1)
+        self.files_box.columnconfigure(1, weight=1)
 
     def expected_port_count(self, key):
         if key.startswith("OPEN_"):
@@ -2252,18 +2317,18 @@ class AFRWizardComplete(tk.Tk):
     def _build_page4(self):
         """Page 4 : retrait des fixtures autour d'une mesure brute."""
 
-        ttk.Label(
+        wrap_label(ttk.Label(
             self.page4,
             text="Remove Fixture from a raw measurement",
-            style="PageTitle.TLabel",
-        ).pack(anchor="w", pady=(0, 10))
+            style="PageTitle.TLabel", wraplength=700,
+        )).pack(anchor="w", fill="x", pady=(0, 10))
 
-        ttk.Label(
+        wrap_label(ttk.Label(
             self.page4,
             text="Raw measurement = Fixture A  +  DUT  +  Fixture B, measured as one 2-port file.",
             foreground="#4f81bd",
-            font=("Segoe UI", 10, "bold"),
-        ).pack(anchor="w", pady=(0, 8))
+            font=("Segoe UI", 10, "bold"), wraplength=700,
+        )).pack(anchor="w", fill="x", pady=(0, 8))
 
         # --- fichier de mesure brute
         source = ttk.LabelFrame(self.page4, text="Raw measurement",
@@ -2284,10 +2349,12 @@ class AFRWizardComplete(tk.Tk):
         self.apply_a = tk.BooleanVar(value=True)
         self.apply_b = tk.BooleanVar(value=True)
 
-        ttk.Checkbutton(fixtures, text="Remove Fixture A (input side)",
-                        variable=self.apply_a).grid(row=0, column=0, sticky="w", padx=5)
-        ttk.Checkbutton(fixtures, text="Remove Fixture B (output side)",
-                        variable=self.apply_b).grid(row=0, column=1, sticky="w", padx=25)
+        sides = ReflowBar(fixtures, spacing=6)
+        sides.grid(row=0, column=0, columnspan=2, sticky="ew")
+        sides.add(ttk.Checkbutton(sides, text="Remove Fixture A (input side)",
+                                  variable=self.apply_a))
+        sides.add(ttk.Checkbutton(sides, text="Remove Fixture B (output side)",
+                                  variable=self.apply_b))
 
         self.fixture_source_text = tk.StringVar(
             value="No fixture yet. Calculate the standards on page 3 first."
@@ -2466,12 +2533,14 @@ class AFRWizardComplete(tk.Tk):
         return rf.Network(frequency=reference.frequency, s=s, z0=reference.z0)
 
     def _build_page5(self):
-        ttk.Label(self.page5,text="Save Fixture",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))
+        wrap_label(ttk.Label(self.page5, text="Save Fixture", style="PageTitle.TLabel",
+                     wraplength=700)).pack(anchor="w", fill="x", pady=(0, 10))
         f=ttk.LabelFrame(self.page5,text="File format",style="Section.TLabelframe",padding=12); f.pack(fill="x")
         self.save_format=tk.StringVar(value="touchstone")
         for text,val in [("Touchstone","touchstone"),("Touchstone 2","touchstone2"),("Citifile","citifile")]: ttk.Radiobutton(f,text=text,value=val,variable=self.save_format).pack(anchor="w")
         self.make4=tk.BooleanVar(); ttk.Checkbutton(f,text="Make 4 ports file from 2 ports data",variable=self.make4).pack(anchor="w")
-        p=ttk.LabelFrame(self.page5,text="Port assignment",style="Section.TLabelframe",padding=12); p.pack(fill="x",pady=10)
+        p = ttk.LabelFrame(self.page5, text="Port assignment", style="Section.TLabelframe", padding=12)
+        p.pack(fill="x", pady=10)
         self.port_format=tk.StringVar(value="vna")
         for text,val in [("PLTS Format","plts"),("VNA Format","vna"),("ADS Format","ads")]: ttk.Radiobutton(p,text=text,value=val,variable=self.port_format).pack(anchor="w")
         o=ttk.LabelFrame(self.page5,text="Output",style="Section.TLabelframe",padding=12); o.pack(fill="x")
@@ -2554,14 +2623,15 @@ class AFRWizardComplete(tk.Tk):
         )
 
     def _build_page6(self):
-        ttk.Label(self.page6,text="Batch Process",style="PageTitle.TLabel").pack(anchor="w",pady=(0,10))
+        wrap_label(ttk.Label(self.page6, text="Batch Process", style="PageTitle.TLabel",
+                     wraplength=700)).pack(anchor="w", fill="x", pady=(0, 10))
         wrap_label(ttk.Label(self.page6, text="Batch: de-embed every measurement of a folder with the fixtures calculated on page 3.", wraplength=600)).pack(anchor="w", fill="x")
         b=ttk.LabelFrame(self.page6,text="Batch configuration",style="Section.TLabelframe",padding=12); b.pack(fill="x",pady=12)
         self.batch_in=tk.StringVar(); self.batch_out=tk.StringVar(); self.batch_pattern=tk.StringVar(value="*.s2p")
         for row,(label,var) in enumerate([("Input directory:",self.batch_in),("Output directory:",self.batch_out)]):
             ttk.Label(b,text=label).grid(row=row,column=0,sticky="w",pady=4); ttk.Entry(b,textvariable=var).grid(row=row,column=1,sticky="ew",padx=5)
             ttk.Button(b,text="Browse...",command=lambda v=var:self.choose_batch_dir(v)).grid(row=row,column=2)
-        ttk.Label(b,text="Pattern:").grid(row=2,column=0,sticky="w"); ttk.Entry(b,textvariable=self.batch_pattern,width=20).grid(row=2,column=1,sticky="w",padx=5); b.columnconfigure(1,weight=1)
+        ttk.Label(b,text="Pattern:").grid(row=2,column=0,sticky="w"); ttk.Entry(b, textvariable=self.batch_pattern, width=12).grid(row=2, column=1, sticky="w", padx=5); b.columnconfigure(1,weight=1)
         ttk.Button(self.page6,text="Run Batch",command=self.run_batch).pack(anchor="w")
         self.batch_log=tk.Text(self.page6,height=18,state="disabled"); self.batch_log.pack(fill="both",expand=True,pady=10)
 
