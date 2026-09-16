@@ -111,8 +111,27 @@ d'ajustement en page 3.
 
 ### Voir le DUT avec et sans de-embedding
 
-Deux boutons ouvrent directement la comparaison, sans avoir a retrouver les
-courbes dans la liste des sources :
+Le graphe apparait **directement dans la page 4**, sous les boutons : la
+transmission a gauche, la reflexion a droite, la mesure brute en trait
+tiretee et le DUT seul en trait plein. Le titre de la vue transmission
+rappelle le gain d'insertion moyen recupere.
+
+La mesure brute est tracable des sa selection, avant meme la correction :
+choisir le fichier suffit pour la voir dans la fenetre de trace.
+
+Sur le jeu de validation (ligne A 300 ps, DUT 80 ps, ligne B 120 ps) le
+graphe montre :
+
+| Frequence | brut, lignes comprises | DUT seul | recupere |
+|---|---|---|---|
+| 1 GHz | -0.67 dB | -0.18 dB | +0.50 dB |
+| 10 GHz | -2.23 dB | -0.57 dB | +1.65 dB |
+| 20 GHz | -2.92 dB | -0.64 dB | +2.28 dB |
+| 40 GHz | -4.20 dB | -0.97 dB | +3.24 dB |
+
+Pour aller plus loin, deux boutons ouvrent la fenetre complete :
+
+
 
 | Bouton | Ce qu'il montre |
 |---|---|

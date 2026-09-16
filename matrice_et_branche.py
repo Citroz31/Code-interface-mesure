@@ -15,6 +15,7 @@ from afr import metrics as afr_metrics
 from afr import reflect as afr_reflect
 from afr import signal as afr_signal
 from afr import thru as afr_thru
+from gui.comparison_plot import ComparisonPlot
 from gui.plot_window import PlotWindow
 from gui.scrollable import (ReflowBar, ResponsiveColumns, ScrollableFrame,
                             wrap_label)
@@ -2418,12 +2419,20 @@ class AFRWizardComplete(tk.Tk):
         actions.add(ttk.Button(actions, text="Plot what the fixtures added",
                                command=self.show_fixture_contribution))
 
+        # --- graphe de comparaison, directement dans la page
+        graph = ttk.LabelFrame(self.page4, text="DUT with and without the lines",
+                               style="Section.TLabelframe", padding=8)
+        graph.pack(fill="x", pady=10)
+
+        self.comparison_plot = ComparisonPlot(graph, height=300)
+        self.comparison_plot.pack(fill="x")
+
         # --- compte rendu
         report = ttk.LabelFrame(self.page4, text="Result",
                                 style="Section.TLabelframe", padding=12)
         report.pack(fill="both", expand=True, pady=10)
 
-        self.deembed_report = tk.Text(report, height=14, state="disabled", wrap="word")
+        self.deembed_report = tk.Text(report, height=10, state="disabled", wrap="word")
         self.deembed_report.pack(fill="both", expand=True)
 
     def choose_raw_dut(self):
@@ -2431,8 +2440,41 @@ class AFRWizardComplete(tk.Tk):
             title="Raw measurement (Fixture A + DUT + Fixture B)",
             filetypes=[("Touchstone 2-port", "*.s2p"), ("All files", "*.*")],
         )
-        if filename:
-            self.raw_dut_file.set(filename)
+        if not filename:
+            return
+
+        self.raw_dut_file.set(filename)
+        self.load_raw_measurement(filename)
+
+    def load_raw_measurement(self, path):
+        """
+        Charge la mesure brute et la rend tracable tout de suite, sans
+        attendre la correction : on peut ainsi regarder la mesure ligne A +
+        DUT + ligne B avant de retirer quoi que ce soit.
+        """
+
+        try:
+            measured = afr_io.load_network(path, expected_ports=2)
+        except Exception as error:
+            messagebox.showerror("Cannot read the measurement", str(error))
+            return None
+
+        measured.name = Path(path).stem
+        self.half_networks["RAW_MEASURED"] = measured
+
+        self.comparison_plot.clear(
+            f"{Path(path).name} loaded.\n"
+            "Press 'Remove Fixture and save' to add the de-embedded DUT."
+        )
+        self.status.set(f"Raw measurement loaded: {Path(path).name}")
+
+        if self.plot_window is not None:
+            try:
+                self.plot_window.refresh_sources()
+            except tk.TclError:
+                self.plot_window = None
+
+        return measured
 
     def refresh_fixture_source_text(self):
         """Rappelle d'ou viennent les fixtures et avec quelle hypothese."""
@@ -2519,6 +2561,10 @@ class AFRWizardComplete(tk.Tk):
         self.half_networks["RAW_MEASURED"] = measured
         self.half_networks["DUT_DEEMBEDDED"] = dut
 
+        # Le graphe de la page se met a jour tout de suite : mesure brute
+        # (ligne A + DUT + ligne B) contre DUT seul.
+        self.comparison_plot.show(measured, dut)
+
         quality = afr_metrics.quality_report(dut.s)
         rebuilt = afr_deembed.embed_fixtures(
             dut,
@@ -2549,6 +2595,10 @@ class AFRWizardComplete(tk.Tk):
             f"(should be numerical noise)",
             "",
             f"Saved to : {output}",
+            "",
+            "The graph above compares the measurement (line A + DUT + line B) with "
+            "the DUT alone. 'Plot before / after' opens the same comparison in a "
+            "full window, with phase, group delay and time domain.",
         ]
 
         if not quality["passive"]:
