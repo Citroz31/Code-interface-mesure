@@ -2878,5 +2878,20 @@ class AFRWizardComplete(tk.Tk):
 
 
 if __name__ == "__main__":
+    # Lancement direct. Pour un demarrage verifie (dependances, journal
+    # d'erreur), preferer run_afr.py ou lancer_afr.bat.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    AFRWizardComplete().mainloop()
+
+    try:
+        AFRWizardComplete().mainloop()
+    except Exception as error:
+        # Sans cela, un double-clic sous Windows referme la console avant
+        # que la trace soit lisible.
+        try:
+            from run_afr import pause_if_needed, report_crash
+
+            report_crash(error)
+            pause_if_needed()
+        except Exception:
+            raise
+        raise SystemExit(1)

@@ -1,6 +1,11 @@
+# Bibliotheques necessaires a l'application (interface + noyau de calcul)
 numpy>=1.24
 scipy>=1.10
 scikit-rf>=0.29
 matplotlib>=3.7
+
+# Optionnel : uniquement pour le filtre "Wavelet" de la page 3
 PyWavelets>=1.4
+
+# Tests
 pytest>=7

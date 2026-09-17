@@ -6,17 +6,65 @@ retrait des fixtures autour du DUT.
 
 ## Installation
 
+**Windows, le plus simple** : double-cliquer sur `installer_dependances.bat`.
+Il installe numpy, scipy, scikit-rf et matplotlib dans le Python de la
+machine, puis affiche un controle de l'installation.
+
+En ligne de commande (tous systemes) :
+
 ```
 python -m venv .venv
 .venv\Scripts\activate          (Windows)   |   source .venv/bin/activate (Linux/macOS)
 pip install -r requirements.txt
 ```
 
+Python 3.9 ou plus recent. Tk est fourni avec Python sous Windows et macOS ;
+sous Linux il faut `sudo apt install python3-tk`.
+
 ## Lancement
+
+**Windows** : double-cliquer sur `lancer_afr.bat`. La fenetre de console
+reste ouverte, donc un eventuel message d'erreur reste lisible.
+
+**Tous systemes** :
+
+```
+python run_afr.py
+```
+
+`run_afr.py` verifie Python, les fichiers du projet et les bibliotheques
+avant de demarrer, et si l'application s'arrete il ecrit la trace complete
+dans `afr_error.log`. Le lancement direct reste possible :
 
 ```
 python matrice_et_branche.py
 ```
+
+### L'application ne se lance pas
+
+Premier reflexe, qui dit en clair ce qui manque :
+
+```
+python run_afr.py --check
+```
+
+| Message | Cause | Solution |
+|---|---|---|
+| `python n'est pas reconnu...` | Python absent du PATH | reinstaller Python en cochant « Add python.exe to PATH », ou lancer `lancer_afr.bat` qui essaie aussi `py -3` |
+| `ModuleNotFoundError: No module named 'skrf'` (ou numpy, scipy, matplotlib) | bibliotheques non installees | `installer_dependances.bat`, ou `pip install -r requirements.txt` |
+| `ModuleNotFoundError: No module named 'afr'` (ou `gui`) | archive extraite partiellement, ou script deplace seul | garder `matrice_et_branche.py`, `afr/`, `gui/` et `run_afr.py` dans le meme dossier |
+| `ModuleNotFoundError: No module named 'tkinter'` / `_tkinter` | Python installe sans Tk | Windows/macOS : reinstaller Python en cochant « tcl/tk and IDLE ». Linux : `sudo apt install python3-tk` |
+| La fenetre s'ouvre et se referme aussitot | erreur pendant la construction | lire `afr_error.log`, cree a cote de `run_afr.py` |
+| Double-clic sur le `.py` : rien ne se passe | la console se ferme avant l'affichage de l'erreur | utiliser `lancer_afr.bat` (il se termine par une pause) |
+
+Le controle equivalent en test :
+
+```
+python -m pytest tests/test_gui_smoke.py -q
+```
+
+Il construit la fenetre, visite les six pages et la referme. S'il passe,
+l'interface est saine et le probleme vient du lancement, pas du code.
 
 ## Tests (sans interface graphique)
 
@@ -30,18 +78,25 @@ Les tests utilisent des fixtures synthetiques (ligne 55 ohm, 300 ps) : voir
 ## Structure
 
 ```
+lancer_afr.bat       lancement Windows (double-clic, console qui reste ouverte)
+installer_dependances.bat  installation des bibliotheques sous Windows
+lancer_afr.sh        lancement Linux / macOS
+run_afr.py           lanceur : verifie l'installation, journalise les erreurs
 afr/                 noyau de calcul (numpy / scikit-rf), sans Tkinter
   io.py              lecture / ecriture Touchstone
   signal.py          filtrage, interpolation, fenetrage temporel
   metrics.py         delai (TTD), longueur, impedance TDR, passivite
-  reflect.py         S1P OPEN / SHORT -> S2P (modele a une discontinuite)
+  reflect.py         S1P OPEN / SHORT -> S2P (discontinuite unique, modele de ligne)
   thru.py            decoupage du 2x-thru
   deembed.py         retrait des fixtures, traitement par lot
   models.py          FixtureResult, BatchItem
 gui/plot_window.py   fenetre de trace (sources, S-parametres, formats, zoom)
+gui/comparison_plot.py  graphe DUT avec et sans de-embedding (page 4)
+gui/scrollable.py    cadres adaptatifs (defilement, barres qui se replient)
 matrice_et_branche.py  interface Tkinter (6 pages)
 validation/          jeu de validation synthetique (S1P, references, S2P extraits)
-tests/               tests pytest
+validation/thz/      jeu submillimetrique jusqu'a 1 THz
+tests/               tests pytest (dont test_gui_smoke.py : l'interface se construit)
 CAHIER_DES_CHARGES.md  specification de la refonte
 ```
 
