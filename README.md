@@ -50,12 +50,18 @@ python run_afr.py --check
 
 | Message | Cause | Solution |
 |---|---|---|
+| **Rien ne se passe, aucune erreur** | un fichier vide a ete lance a la place de l'application (`function.py`, `main_with_two_rangesliders.py`, `measure_vna.py` sont des restes vides) | lancer `lancer_afr.bat` ou `python run_afr.py` ; ces fichiers affichent desormais un rappel au lieu de ne rien faire |
+| L'application tourne mais aucune fenetre n'apparait | fenetre ouverte derriere les autres, ou hors ecran (second moniteur debranche) | corrige : la fenetre est desormais centree, bornee a la taille de l'ecran et ramenee au premier plan. Verifier aussi la barre des taches |
 | `python n'est pas reconnu...` | Python absent du PATH | reinstaller Python en cochant « Add python.exe to PATH », ou lancer `lancer_afr.bat` qui essaie aussi `py -3` |
 | `ModuleNotFoundError: No module named 'skrf'` (ou numpy, scipy, matplotlib) | bibliotheques non installees | `installer_dependances.bat`, ou `pip install -r requirements.txt` |
 | `ModuleNotFoundError: No module named 'afr'` (ou `gui`) | archive extraite partiellement, ou script deplace seul | garder `matrice_et_branche.py`, `afr/`, `gui/` et `run_afr.py` dans le meme dossier |
 | `ModuleNotFoundError: No module named 'tkinter'` / `_tkinter` | Python installe sans Tk | Windows/macOS : reinstaller Python en cochant « tcl/tk and IDLE ». Linux : `sudo apt install python3-tk` |
 | La fenetre s'ouvre et se referme aussitot | erreur pendant la construction | lire `afr_error.log`, cree a cote de `run_afr.py` |
 | Double-clic sur le `.py` : rien ne se passe | la console se ferme avant l'affichage de l'erreur | utiliser `lancer_afr.bat` (il se termine par une pause) |
+
+Le rapport de `--check` est aussi ecrit dans `afr_check.log`, et une erreur
+de demarrage dans `afr_error.log` : ces deux fichiers suffisent pour analyser
+un probleme a distance.
 
 Le controle equivalent en test :
 

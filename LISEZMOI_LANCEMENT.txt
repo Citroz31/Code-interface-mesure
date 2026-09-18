@@ -1,0 +1,36 @@
+===============================================================
+  AFR - Automatic Fixture Removal : comment lancer le logiciel
+===============================================================
+
+1) Extraire l'archive EN ENTIER dans un dossier.
+   Les dossiers afr\ et gui\ doivent rester a cote des fichiers.
+
+2) Premiere fois seulement : double-clic sur
+
+       installer_dependances.bat
+
+   (installe numpy, scipy, scikit-rf et matplotlib)
+
+3) Ensuite, pour utiliser le logiciel : double-clic sur
+
+       lancer_afr.bat
+
+---------------------------------------------------------------
+Si quelque chose ne va pas
+---------------------------------------------------------------
+
+Double-clic sur lancer_afr.bat : la fenetre de console reste
+ouverte et affiche ce qui bloque. Un rapport est egalement
+ecrit dans le dossier :
+
+    afr_check.log   etat de l'installation
+    afr_error.log   trace complete en cas d'erreur
+
+Envoyer ces deux fichiers suffit pour analyser le probleme.
+
+Attention : function.py, main_with_two_rangesliders.py et
+measure_vna.py sont d'anciens fichiers vides. Les lancer ne fait
+rien et n'affiche aucune erreur : ce ne sont pas des points
+d'entree.
+
+Sous Linux / macOS : ./lancer_afr.sh ou python3 run_afr.py

@@ -481,6 +481,45 @@ class AFRWizardComplete(tk.Tk):
         self._build_page6()
         self._footer()
         self.show_page(0)
+        self.bring_to_front()
+
+    def bring_to_front(self):
+        """
+        Rend la fenetre visible a coup sur : taille bornee a l'ecran, centree,
+        au premier plan.
+
+        Sans cela elle peut s'ouvrir plus grande que l'ecran, hors de l'ecran
+        (deuxieme moniteur debranche depuis) ou derriere les autres fenetres :
+        l'application tourne, mais rien n'apparait et aucune erreur n'est
+        affichee.
+        """
+
+        try:
+            self.update_idletasks()
+
+            screen_width = self.winfo_screenwidth()
+            screen_height = self.winfo_screenheight()
+
+            width = min(1180, max(560, screen_width - 80))
+            height = min(760, max(420, screen_height - 120))
+            x = max(0, (screen_width - width) // 2)
+            y = max(0, (screen_height - height) // 3)
+
+            self.geometry(f"{width}x{height}+{x}+{y}")
+            self.deiconify()
+            self.lift()
+
+            # Premier plan le temps de l'ouverture, puis comportement normal :
+            # sinon la fenetre resterait au-dessus de toutes les autres.
+            self.attributes("-topmost", True)
+            self.after(500, lambda: self.attributes("-topmost", False))
+            self.focus_force()
+
+            log.info("Fenetre principale affichee : %dx%d+%d+%d (ecran %dx%d)",
+                     width, height, x, y, screen_width, screen_height)
+        except Exception:
+            log.warning("Impossible de placer la fenetre au premier plan",
+                        exc_info=True)
 
     def save_network(
             self,

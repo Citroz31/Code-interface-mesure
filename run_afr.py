@@ -22,6 +22,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LOG_FILE = HERE / "afr_error.log"
+CHECK_FILE = HERE / "afr_check.log"
 
 MINIMUM_PYTHON = (3, 9)
 
@@ -105,43 +106,56 @@ def install_hint(missing):
 
 
 def check(verbose=True):
-    """Controle complet. Retourne True si l'application peut demarrer."""
+    """
+    Controle complet. Retourne True si l'application peut demarrer.
+
+    Le rapport est aussi ecrit dans ``afr_check.log`` : il reste lisible meme
+    si la console se referme, et il peut etre envoye tel quel pour analyse.
+    """
 
     python_ok, lines = python_report()
     files_ok, file_lines, _ = files_report()
     modules_ok, module_lines, missing = modules_report()
 
-    if verbose:
-        print("=" * 72)
-        print("Verification de l'installation AFR")
-        print("=" * 72)
-        for line in lines + file_lines:
-            print(line)
-        print("Bibliotheques :")
-        for line in module_lines:
-            print(line)
-        print("=" * 72)
+    report = ["=" * 72, "Verification de l'installation AFR", "=" * 72]
+    report += lines + file_lines
+    report.append("Bibliotheques :")
+    report += module_lines
+    report.append("=" * 72)
 
     if not python_ok:
-        print("Python est trop ancien : installer Python "
-              f"{'.'.join(map(str, MINIMUM_PYTHON))} ou plus recent "
-              "(https://www.python.org/downloads/).")
+        report.append("Python est trop ancien : installer Python "
+                      f"{'.'.join(map(str, MINIMUM_PYTHON))} ou plus recent "
+                      "(https://www.python.org/downloads/).")
 
     if not files_ok:
-        print("Le dossier du projet est incomplet : reextraire l'archive en "
-              "entier, en gardant les sous-dossiers afr/ et gui/ a cote de "
-              "matrice_et_branche.py.")
+        report.append("Le dossier du projet est incomplet : reextraire l'archive "
+                      "en entier, en gardant les sous-dossiers afr/ et gui/ a "
+                      "cote de matrice_et_branche.py.")
 
     if missing:
-        print("Bibliotheques manquantes : " + ", ".join(missing))
-        print("Installation :")
-        print("    " + install_hint(missing))
-        print("ou, pour tout installer d'un coup :")
-        print(f'    "{sys.executable}" -m pip install -r requirements.txt')
+        report.append("Bibliotheques manquantes : " + ", ".join(missing))
+        report.append("Installation :")
+        report.append("    " + install_hint(missing))
+        report.append("ou, pour tout installer d'un coup :")
+        report.append(f'    "{sys.executable}" -m pip install -r requirements.txt')
 
     ok = python_ok and files_ok and modules_ok
-    if verbose and ok:
-        print("Tout est en place : l'application peut demarrer.")
+    if ok:
+        report.append("Tout est en place : l'application peut demarrer.")
+
+    try:
+        CHECK_FILE.write_text("\n".join(report) + "\n", encoding="utf-8")
+        report.append(f"Rapport enregistre dans : {CHECK_FILE}")
+    except Exception:
+        pass
+
+    if verbose:
+        print("\n".join(report))
+    elif not ok:
+        # Meme en mode silencieux, ne jamais echouer sans rien dire.
+        print("\n".join(report))
+
     return ok
 
 
@@ -275,7 +289,6 @@ def main(argv=None):
             return 1
 
     if not check(verbose=False):
-        check()                      # deuxieme passage, cette fois affiche
         pause_if_needed()
         return 1
 
@@ -284,9 +297,23 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
 
+    # Messages de progression : si rien n'apparait a l'ecran, la console dit
+    # au moins jusqu'ou le demarrage est alle.
+    print("Demarrage de l'interface AFR")
+    print(f"  interpreteur    : {sys.executable}")
+    print(f"  dossier         : {HERE}")
+    print("  construction de la fenetre...")
+
     try:
         from matrice_et_branche import AFRWizardComplete
-        AFRWizardComplete().mainloop()
+
+        window = AFRWizardComplete()
+        print("  fenetre construite, affichage a l'ecran.")
+        print("  si aucune fenetre n'apparait : regarder la barre des taches,")
+        print("  puis la section 'L'application ne se lance pas' du README.")
+
+        window.mainloop()
+        print("Fenetre fermee : arret normal.")
     except Exception as error:
         report_crash(error)
         pause_if_needed()
