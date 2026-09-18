@@ -13,6 +13,10 @@
 
 3) Ensuite, pour utiliser le logiciel : double-clic sur
 
+       lancer_afr_qt.bat      (nouvelle interface, graphes interactifs)
+
+   ou, pour l'ancienne interface :
+
        lancer_afr.bat
 
 ---------------------------------------------------------------

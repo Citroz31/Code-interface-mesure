@@ -1,7 +1,14 @@
-# Bibliotheques necessaires a l'application (interface + noyau de calcul)
+# Noyau de calcul (indispensable dans tous les cas)
 numpy>=1.24
 scipy>=1.10
 scikit-rf>=0.29
+
+# Interface Qt : nouvelle version, graphes interactifs (lancer_afr_qt.bat)
+PySide6>=6.5
+pyqtgraph>=0.13
+
+# Ancienne interface Tkinter (lancer_afr.bat) : Tk vient avec Python,
+# seul matplotlib est a installer
 matplotlib>=3.7
 
 # Optionnel : uniquement pour le filtre "Wavelet" de la page 3

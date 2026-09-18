@@ -4,6 +4,19 @@ Outil de retrait de fixtures (de-embedding) pour mesures VNA : extraction des
 fixtures A et B a partir d'un 2x-thru et/ou de standards OPEN / SHORT, puis
 retrait des fixtures autour du DUT.
 
+## Deux interfaces
+
+| | Interface Qt (nouvelle) | Interface Tkinter (d'origine) |
+|---|---|---|
+| Lancement | `lancer_afr_qt.bat` / `python run_afr_qt.py` | `lancer_afr.bat` / `python run_afr.py` |
+| Graphes | pyqtgraph : zoom molette, rectangle, marqueurs, curseur, export | matplotlib statique |
+| Bibliotheques | PySide6 + pyqtgraph | Tk + matplotlib |
+| Options AFR | identiques | identiques |
+
+Les deux partagent le meme noyau de calcul (`afr/`) : un resultat obtenu avec
+l'une est obtenu a l'identique avec l'autre. L'ancienne interface reste
+disponible, rien n'a ete supprime.
+
 ## Installation
 
 **Windows, le plus simple** : double-cliquer sur `installer_dependances.bat`.
@@ -84,7 +97,15 @@ Les tests utilisent des fixtures synthetiques (ligne 55 ohm, 300 ps) : voir
 ## Structure
 
 ```
-lancer_afr.bat       lancement Windows (double-clic, console qui reste ouverte)
+lancer_afr_qt.bat    lancement Windows de l'interface Qt (recommande)
+run_afr_qt.py        lanceur Qt : verifie l'installation, journalise les erreurs
+qtapp/               interface Qt (PySide6 + pyqtgraph)
+  session.py         etat et chaine de calcul, sans aucune dependance a l'interface
+  traces.py          conversion des parametres S selon le format d'affichage
+  plotview.py        graphe interactif (zoom, marqueurs, formats, export)
+  pages.py           les six pages
+  mainwindow.py      navigation, avertissements, barre d'etat
+lancer_afr.bat       lancement Windows de l'ancienne interface Tkinter
 installer_dependances.bat  installation des bibliotheques sous Windows
 lancer_afr.sh        lancement Linux / macOS
 run_afr.py           lanceur : verifie l'installation, journalise les erreurs
@@ -165,6 +186,41 @@ aller-retour et le plancher de bruit estime hors fenetre. En dessous de
 35 dB, un avertissement signale que |S21| devient incertain — cas courant
 au-dela de 500 GHz. Remedes, dans l'ordre : moyennage ou bande FI plus
 etroite au VNA, fixture plus court, modele de ligne ajuste.
+
+## Graphes interactifs (interface Qt)
+
+Chaque page de calcul a son graphe, et le meme composant sert partout.
+
+**Zoom et deplacement**
+
+- molette : zoom autour du pointeur ;
+- clic gauche glisse : deplacement ;
+- case « Zoom par rectangle » : selection d'une zone a la souris ;
+- case « Verrouiller l'axe vertical » : zoom horizontal seul, pratique pour
+  suivre une bande etroite sans perdre l'echelle des dB ;
+- bouton « Vue complete » : retour a l'ensemble des donnees.
+
+**Lecture des valeurs**
+
+- un reticule suit le pointeur et la ligne sous le graphe donne la frequence
+  et la valeur de chaque courbe visible ;
+- case « Poser un marqueur au clic » : marqueurs facon VNA, deplacables, avec
+  l'ecart entre les deux derniers (delta) affiche en continu.
+
+**Formats, sans retracer**
+
+dB, phase, phase deroulee, temps de propagation de groupe, ROS (VSWR), partie
+reelle, partie imaginaire, reel et imaginaire ensemble, abaque de Smith
+(avec sa grille), reponse impulsionnelle et reponse en echelon (TDR).
+L'axe des frequences bascule en logarithmique d'une case a cocher.
+
+**Comparaison et export**
+
+- la liste de gauche coche les courbes a superposer : mesure brute, fixtures
+  extraits, DUT de-embedde, moities de 2x-thru, references chargees ;
+- un clic sur l'echantillon de legende eteint ou rallume une courbe ;
+- « Exporter PNG » pour l'image, « Exporter CSV » pour les valeurs tracees
+  (une paire de colonnes par courbe).
 
 ## Interface adaptative
 
